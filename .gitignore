@@ -1,0 +1,31 @@
+# ── ONE system source files (NAS-synced, confidential business data) ──────────
+ONE/
+
+# ── Weekly SAP exports and operational data ───────────────────────────────────
+260629在庫.xlsx
+SAP在庫(ZM13)0629.xlsx
+販売計画6月提出分_2026年6月~2026年11月.xlsx
+調達AI支援システム 要件アンケート(1-31).xlsx
+
+# ── Binary / Word versions of docs (source-of-truth is the .md / .xlsx) ───────
+Purchasing Team Function Survey.docx
+Project_Charter_Phase1_FILLED.docx
+
+# ── Generated outputs from the consolidation engine ───────────────────────────
+consolidation/consolidated.db
+consolidation/*.xlsx
+consolidation/anomaly_findings_history.json
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
