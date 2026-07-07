@@ -35,7 +35,6 @@ def close_enough(a, b, tol=1e-6):
 
 
 def check_seasonality() -> dict:
-    k = poc_v0.load_keisuu(p1)
     history = load_keisuu_history()
     ref = load_keisuu_reference()
     season = compute_seasonality(history, [37, 38, 39, 40, 41])
