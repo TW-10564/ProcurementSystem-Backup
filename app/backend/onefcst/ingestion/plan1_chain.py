@@ -61,7 +61,11 @@ def load_plan_chain(sheet: str) -> dict:
         name = values[ri][1]
         if name is None or str(name).strip() in ("", "-") or "合計" in str(name):
             continue
-        cells = [{"value": values[ri][c], "formula": formulas[ri][c]}
+        # A cell with no formula reads back as its own value from openpyxl's
+        # data_only=False pass too (it's a constant) — classify_formula()
+        # expects None for that case, not the raw number.
+        cells = [{"value": values[ri][c],
+                 "formula": formulas[ri][c] if isinstance(formulas[ri][c], str) else None}
                 for c in date_cols]
         # Skip the text sub-header row right after the date row (e.g.
         # "当月見込(法込)"/"6月"...) and any other non-numeric row — real SKU
