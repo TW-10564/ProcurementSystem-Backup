@@ -43,9 +43,9 @@ DB_PATH = consolidate.DB_PATH
 # ── source file resolution ────────────────────────────────────────────────────
 
 def _find_sako_file():
-    """Find the most recent *在庫*.xlsx in the project root (parent of consolidation/)."""
-    project_root = HERE.parent
-    candidates = sorted(project_root.glob("*在庫*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+    """Find the most recent *在庫*.xlsx in data/sap/ (repo root's shared data dir)."""
+    sap_dir = HERE.parent / "data" / "sap"
+    candidates = sorted(sap_dir.glob("*在庫*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0] if candidates else None
 
 SAKO_FILE = Path(os.environ["SAKO_FILE"]) if os.environ.get("SAKO_FILE") else _find_sako_file()
