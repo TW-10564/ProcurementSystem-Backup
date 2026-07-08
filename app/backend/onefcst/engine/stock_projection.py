@@ -45,7 +45,7 @@ def suggest_order(*, current_balance: float, monthly_demand: list[float],
     order_by_month_index is shifted earlier by lead_time_days so the order
     LANDS before the breach, not is merely placed on the breach date.
     """
-    demand_avg = avg_monthly_demand or (sum(monthly_demand) / len(monthly_demand)
+    demand_avg = avg_monthly_demand or (sum(d or 0.0 for d in monthly_demand) / len(monthly_demand)
                                         if monthly_demand else 0.0)
     safety_stock = (min_stock_days or 0) / 30.0 * demand_avg
     projected = project_stock(current_balance, monthly_demand)

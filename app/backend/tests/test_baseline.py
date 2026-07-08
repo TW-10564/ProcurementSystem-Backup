@@ -140,6 +140,29 @@ def test_wape_hand_computed():
 
 
 # ------------------------------------------------------- selection logic ---
+def test_select_winner_crowns_a_method_that_clearly_beats_combo():
+    wapes = {"flat3": 90.0, "flat6": 95.0, "combo": 80.0, "seasonal": 20.0}
+    assert baseline.select_winner(wapes) == "seasonal"    # beats combo by 60 > MARGIN
+
+
+def test_select_winner_defaults_to_combo_when_margin_is_too_thin():
+    """FIX_PLAN M1 — the core fix: winner-take-all on a noisy 6-point window
+    overfits; a method that's only marginally better than combo must not be
+    crowned, since combo is documented to be the steadier real-world choice."""
+    wapes = {"flat3": 90.0, "flat6": 95.0, "combo": 80.0, "median6": 75.0}
+    assert baseline.select_winner(wapes) == "combo"       # only 5 points better
+
+
+def test_select_winner_falls_back_to_best_when_combo_absent():
+    wapes = {"flat3": 40.0, "flat6": 30.0}
+    assert baseline.select_winner(wapes) == "flat6"
+
+
+def test_select_winner_returns_combo_when_combo_is_itself_the_minimum():
+    wapes = {"flat3": 90.0, "combo": 20.0, "seasonal": 21.0}
+    assert baseline.select_winner(wapes) == "combo"
+
+
 def test_holdout_picks_seasonal_for_seasonal_series():
     shape = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
     obs = series(date(2022, 7, 1), [float(v) for v in shape * 4])

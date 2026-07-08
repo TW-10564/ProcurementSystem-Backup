@@ -1,7 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, downloadUrl } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
-import type { MismatchReport } from "../api/types";
+import type { MismatchGroup, MismatchReport } from "../api/types";
+
+type SevFilter = "ALL" | "HIGH" | "MEDIUM" | "LOW";
+
+const SEV_ORDER: Record<MismatchGroup["severity"], number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+
+function sevStripe(sev: MismatchGroup["severity"]) {
+  return sev === "HIGH" ? "red" : sev === "MEDIUM" ? "amber" : "green";
+}
 
 function severityPill(sev: string) {
   const cls = sev === "HIGH" ? "p-high" : sev === "MEDIUM" ? "p-medium" : "p-low";
@@ -9,12 +17,38 @@ function severityPill(sev: string) {
 }
 
 export default function Mismatch() {
-  const { t } = useLang();
+  const { t, lang } = useLang();
   const [report, setReport] = useState<MismatchReport | null>(null);
+  const [sevFilter, setSevFilter] = useState<SevFilter>("ALL");
 
   useEffect(() => {
     api.mismatchReport().then(setReport);
   }, []);
+
+  const groups = report?.groups ?? [];
+  const counts = useMemo(
+    () => ({
+      HIGH: groups.filter((g) => g.severity === "HIGH").length,
+      MEDIUM: groups.filter((g) => g.severity === "MEDIUM").length,
+      LOW: groups.filter((g) => g.severity === "LOW").length,
+    }),
+    [groups]
+  );
+  const total = groups.length;
+
+  const visible = useMemo(() => {
+    const list = sevFilter === "ALL" ? groups : groups.filter((g) => g.severity === sevFilter);
+    return [...list].sort(
+      (a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity] || a.gap - b.gap
+    );
+  }, [groups, sevFilter]);
+
+  const segItems: { key: SevFilter; label: string }[] = [
+    { key: "ALL", label: lang === "ja" ? "すべて" : "All" },
+    { key: "HIGH", label: "HIGH" },
+    { key: "MEDIUM", label: "MEDIUM" },
+    { key: "LOW", label: "LOW" },
+  ];
 
   return (
     <div>
@@ -25,6 +59,56 @@ export default function Mismatch() {
 
       <div className="banner info">ℹ️ {t("mismatch_banner")}</div>
 
+      {/* ── severity KPI triage ─────────────────────────────────────── */}
+      <div className="kpis">
+        <div className="kpi accent-red">
+          <div className="lab">{lang === "ja" ? "重大（HIGH）" : "High severity"}</div>
+          <div className="val">{report ? counts.HIGH : "—"}</div>
+          <div className="sub">
+            {lang === "ja" ? "即時対応が必要なソケット" : "Sockets needing immediate action"}
+          </div>
+        </div>
+        <div className="kpi accent-amber">
+          <div className="lab">{lang === "ja" ? "注意（MEDIUM）" : "Medium severity"}</div>
+          <div className="val">{report ? counts.MEDIUM : "—"}</div>
+          <div className="sub">
+            {lang === "ja" ? "計画差異の監視対象ソケット" : "Watch list — sockets with plan divergence"}
+          </div>
+        </div>
+        <div className="kpi accent-green">
+          <div className="lab">{lang === "ja" ? "良好（LOW）" : "Low / OK"}</div>
+          <div className="val">{report ? counts.LOW : "—"}</div>
+          <div className="sub">
+            {lang === "ja" ? "整合が取れているソケット" : "Sockets in balance"}
+          </div>
+        </div>
+        <div className="kpi">
+          <div className="lab">{lang === "ja" ? "確認対象グループ" : "Groups checked"}</div>
+          <div className="val">{report ? total : "—"}</div>
+          {total > 0 && (
+            <div className="stack-bar" style={{ marginTop: 10 }}>
+              {counts.HIGH > 0 && (
+                <span
+                  style={{ width: `${(counts.HIGH / total) * 100}%`, background: "var(--red)" }}
+                />
+              )}
+              {counts.MEDIUM > 0 && (
+                <span
+                  style={{ width: `${(counts.MEDIUM / total) * 100}%`, background: "var(--amber)" }}
+                />
+              )}
+              {counts.LOW > 0 && (
+                <span
+                  style={{ width: `${(counts.LOW / total) * 100}%`, background: "var(--green)" }}
+                />
+              )}
+            </div>
+          )}
+          <div className="sub">{t("mismatch_table_month", { month: report?.month ?? "—" })}</div>
+        </div>
+      </div>
+
+      {/* ── triage list ─────────────────────────────────────────────── */}
       <div className="card">
         <div className="hd">
           <div>
@@ -35,52 +119,151 @@ export default function Mismatch() {
             {t("common_download_excel")}
           </a>
         </div>
-        <div className="tablewrap">
-          {!report ? (
-            <div className="empty">{t("common_loading")}</div>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>{t("mismatch_th_socket")}</th>
-                  <th className="num">{t("mismatch_th_cpu")}</th>
-                  <th className="num">{t("mismatch_th_mb")}</th>
-                  <th className="num">{t("mismatch_th_gap")}</th>
-                  <th className="num">{t("mismatch_th_pct")}</th>
-                  <th>{t("mismatch_th_exclusive")}</th>
-                  <th>{t("mismatch_th_takeorpay")}</th>
-                  <th>{t("mismatch_th_severity")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.groups.map((g) => (
-                  <tr key={g.socket}>
-                    <td style={{ fontWeight: 700 }}>{g.socket}</td>
-                    <td className="num mono">{g.cpu_demand.toLocaleString()}</td>
-                    <td className="num mono">{g.mb_demand.toLocaleString()}</td>
-                    <td
-                      className="num mono"
-                      style={{ color: g.gap < 0 ? "var(--red)" : "var(--green)" }}
-                    >
-                      {g.gap > 0 ? "+" : ""}
-                      {g.gap.toLocaleString()}
-                    </td>
-                    <td className="num mono">{g.pct !== null ? `${g.pct}%` : "—"}</td>
-                    <td>{g.exclusive ? t("mismatch_yes") : <span className="dim">—</span>}</td>
-                    <td>
-                      {g.takeorpay_n1 ? (
+
+        <div className="toolbar">
+          <span className="eyebrow" style={{ margin: 0 }}>
+            {lang === "ja" ? "深刻度で絞り込み" : "Filter by severity"}
+          </span>
+          <div className="seg">
+            {segItems.map((s) => (
+              <button
+                key={s.key}
+                className={sevFilter === s.key ? "on" : ""}
+                onClick={() => setSevFilter(s.key)}
+              >
+                {s.label}
+                {report && s.key !== "ALL" ? ` · ${counts[s.key]}` : ""}
+              </button>
+            ))}
+          </div>
+          <span className="dim" style={{ marginLeft: "auto", fontSize: "0.76rem" }}>
+            {lang === "ja" ? `${visible.length} 件表示` : `${visible.length} shown`}
+          </span>
+        </div>
+
+        {!report ? (
+          <div className="empty">{t("common_loading")}</div>
+        ) : visible.length === 0 ? (
+          <div className="empty">
+            {lang === "ja" ? "該当するグループはありません" : "No groups match this filter"}
+          </div>
+        ) : (
+          <div className="grid2" style={{ padding: 18 }}>
+            {visible.map((g) => {
+              const maxDemand = Math.max(g.cpu_demand, g.mb_demand, 1);
+              return (
+                <div key={g.socket} className={`card stripe-card ${sevStripe(g.severity)}`}>
+                  <div className="hd">
+                    <div>
+                      <div className="eyebrow">{t("mismatch_th_socket")}</div>
+                      <h3 className="mono">{g.socket}</h3>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      {g.takeorpay_n1 && (
                         <span className="pill p-high">{t("mismatch_attention")}</span>
+                      )}
+                      {severityPill(g.severity)}
+                    </div>
+                  </div>
+
+                  <div style={{ padding: "14px 20px 16px" }}>
+                    {/* CPU vs MB demand bars */}
+                    {(
+                      [
+                        { lab: t("mismatch_th_cpu"), val: g.cpu_demand },
+                        { lab: t("mismatch_th_mb"), val: g.mb_demand },
+                      ] as const
+                    ).map((row) => (
+                      <div
+                        key={row.lab}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 72px 1.4fr",
+                          alignItems: "center",
+                          gap: 10,
+                          marginBottom: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: "0.78rem", color: "var(--muted)", fontWeight: 600 }}>
+                          {row.lab}
+                        </span>
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: "0.84rem",
+                            fontWeight: 700,
+                            textAlign: "right",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        >
+                          {row.val.toLocaleString()}
+                        </span>
+                        <span className="minibar dim-track" style={{ width: "100%" }}>
+                          <span
+                            className="minibar"
+                            style={{
+                              display: "block",
+                              width: `${(row.val / maxDemand) * 100}%`,
+                              height: "100%",
+                            }}
+                          />
+                        </span>
+                      </div>
+                    ))}
+
+                    {/* gap + coverage */}
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 24,
+                        marginTop: 12,
+                        paddingTop: 12,
+                        borderTop: "1px solid var(--line2)",
+                      }}
+                    >
+                      <div>
+                        <div className="eyebrow">{t("mismatch_th_gap")}</div>
+                        <div className="statline">
+                          <span
+                            className="n"
+                            style={{ color: g.gap < 0 ? "var(--red)" : "var(--green)" }}
+                          >
+                            {g.gap > 0 ? "+" : ""}
+                            {g.gap.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="eyebrow">{t("mismatch_th_pct")}</div>
+                        <div className="statline">
+                          <span className="n">{g.pct !== null ? `${g.pct}%` : "—"}</span>
+                        </div>
+                      </div>
+                      <div style={{ marginLeft: "auto", textAlign: "right" }}>
+                        <div className="eyebrow">{t("mismatch_th_exclusive")}</div>
+                        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginTop: 2 }}>
+                          {g.exclusive ? t("mismatch_yes") : <span className="dim">—</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* take-or-pay flag row */}
+                    <div style={{ marginTop: 10, fontSize: "0.76rem", color: "var(--muted)" }}>
+                      {t("mismatch_th_takeorpay")}:{" "}
+                      {g.takeorpay_n1 ? (
+                        <span style={{ color: "var(--red)", fontWeight: 700 }}>
+                          {t("mismatch_attention")}
+                        </span>
                       ) : (
                         <span className="dim">—</span>
                       )}
-                    </td>
-                    <td>{severityPill(g.severity)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="card">

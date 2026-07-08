@@ -128,6 +128,7 @@ class Forecast(Base):
     month = Column(Date, nullable=False)
     baseline = Column(Float)
     method = Column(String)              # which candidate won this SKU's hold-out
+    __table_args__ = (UniqueConstraint("run_id", "item_id", "month"),)
 
 
 class Adjustment(Base):
@@ -153,10 +154,11 @@ class CompatRule(Base):
     part_b_id = Column(Integer, ForeignKey("items.id"), nullable=False)
     relation = Column(String, nullable=False)   # fits / requires
     confidence = Column(Float)
-    origin = Column(String)              # ai / history / spec / human
+    origin = Column(String)              # ai_spec_heuristic / llm / history / human
     status = Column(String, default="draft")    # draft / confirmed / rejected
     confirmed_by = Column(String)
     confirmed_at = Column(DateTime)
+    note = Column(Text)                  # drafting rationale (e.g. LLM reasoning)
     __table_args__ = (UniqueConstraint("part_a_id", "part_b_id", "relation"),)
 
 
@@ -212,5 +214,9 @@ class AccuracyScore(Base):
     month = Column(Date)
     level = Column(String)               # baseline / adjusted / their_plan
     mape = Column(Float)
-    wape = Column(Float)
+    wape = Column(Float)                 # 6-month blended (full-horizon) WAPE
+    wape_m1 = Column(Float)              # near-term (M+1-only) WAPE — FIX_PLAN
+                                          # M1: the number a buyer actually acts
+                                          # on given lead times; promoted to the
+                                          # primary per-item confidence signal
     bias = Column(Float)

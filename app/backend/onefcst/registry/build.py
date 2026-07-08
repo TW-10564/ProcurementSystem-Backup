@@ -166,11 +166,79 @@ def build_registry() -> dict:
     session.commit()
     stats["items"] = session.query(func.count(Item.id)).scalar()
     stats["aliases"] = session.query(func.count(ItemAlias.id)).scalar()
+
+    # Cross-system alias collisions (FIX_PLAN C3): the same alias string
+    # claimed by items from >1 source_system. _add_alias's conflict counter
+    # only catches same-alias-SAME-source_system collisions (matching the
+    # DB's own unique constraint); this is the wider check that surfaces the
+    # case resolve() below can silently mis-resolve.
+    dup_rows = (session.query(ItemAlias.alias,
+                              func.count(func.distinct(ItemAlias.item_id)))
+               .group_by(ItemAlias.alias)
+               .having(func.count(func.distinct(ItemAlias.item_id)) > 1).all())
+    stats["cross_system_alias_conflicts"] = len(dup_rows)
+    stats["cross_system_conflict_aliases"] = [alias for alias, _ in dup_rows][:50]
+
     session.close()
     return stats
 
 
 def resolve(session, name: str) -> Item | None:
-    """Resolve any source-system name to its canonical item."""
-    row = (session.query(ItemAlias).filter(ItemAlias.alias == name).first())
+    """Resolve any source-system name to its canonical item.
+
+    Deterministic tie-break (FIX_PLAN C3): when the same alias string is
+    claimed by items from two different source systems (not blocked by the
+    DB's unique constraint, which is per (alias, source_system)), ordering
+    by ItemAlias.id picks the FIRST one ever recorded, consistently across
+    runs — rather than arbitrary DB storage order. This does not resolve
+    the underlying ambiguity (see build_registry's
+    cross_system_alias_conflicts for that), it only makes the outcome
+    stable and reproducible instead of silently flipping between rebuilds."""
+    row = (session.query(ItemAlias).filter(ItemAlias.alias == name)
+          .order_by(ItemAlias.id.asc()).first())
     return row.item if row else None
+
+
+def _norm_for_crosswalk(s) -> str:
+    """Fullwidth→halfwidth, case-fold, strip spaces/hyphens — mirrors the
+    proven norm() in consolidation/stock_paste.py (duplicated rather than
+    imported: that module pulls in an unrelated legacy consolidation DB at
+    import time). FIX_PLAN M3: resolve()'s exact-string match leaves a blank-
+    あだ名 SAP row unmatched even after the crosswalk correctly identifies
+    the item, when the two names differ only by width/spacing/hyphenation
+    (e.g. SAP's fullwidth 'Ｂ450Ｍ' vs the ONE alias 'B450M')."""
+    if s in (None, ""):
+        return ""
+    text = str(s).translate(str.maketrans(
+        "ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ"
+        "ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ"
+        "０１２３４５６７８９",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789",
+    ))
+    text = text.upper()
+    for ch in "　 -_+()／/":
+        text = text.replace(ch, "")
+    return text.strip()
+
+
+def build_normalized_alias_index(session) -> dict[str, Item]:
+    """{normalized_alias: item} — first (lowest ItemAlias.id, matching
+    resolve()'s own deterministic tie-break) wins a collision. Built once
+    per caller rather than per-row: normalizing 9k+ aliases per blank-あだ名
+    row would be wasteful."""
+    index: dict[str, Item] = {}
+    rows = (session.query(ItemAlias).order_by(ItemAlias.id.asc()).all())
+    for row in rows:
+        key = _norm_for_crosswalk(row.alias)
+        if key and key not in index:
+            index[key] = row.item
+    return index
+
+
+def resolve_normalized(index: dict[str, Item], name: str) -> Item | None:
+    """Fallback for resolve() using a prebuilt normalized-alias index (see
+    build_normalized_alias_index) — width/spacing/hyphen-insensitive."""
+    key = _norm_for_crosswalk(name)
+    return index.get(key) if key else None

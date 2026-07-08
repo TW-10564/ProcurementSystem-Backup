@@ -44,7 +44,7 @@ export default function Layout() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="logo">📦</div>
+          <img className="logo-img" src="/twave-logo.png" alt="THIRDWAVE" />
           <div>
             <h1>{t("brand_name")}</h1>
             <p>{t("brand_sub")}</p>

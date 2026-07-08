@@ -18,10 +18,8 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from sqlalchemy import func
-
 from .db import get_session
-from .models import AccuracyScore, Forecast, ForecastRun, Item, PlanValue
+from .models import AccuracyScore, Forecast, ForecastRun, Item, PlanValue, Snapshot
 from .engine import baseline
 from . import planner_accuracy
 from . import tier2_forecasting
@@ -31,19 +29,28 @@ DEFAULT_HORIZON = 12
 
 
 def _series_by_item(session) -> dict[int, dict[date, float]]:
-    """{item_id: {month: value}} from master-level plan values. Duplicate
-    (item, month) rows across snapshots/sheets are averaged, matching how
-    verify/order_suggestions.py reads the same level."""
-    rows = (session.query(PlanValue.item_id, PlanValue.month,
-                          func.avg(PlanValue.value))
+    """{item_id: {month: value}} from master-level plan values.
+
+    FIX_PLAN C4: duplicate (item, month) rows happen when a source file is
+    re-ingested after a correction — the earlier (now-stale) snapshot's row
+    is NOT replaced, it's just added alongside the new one (no unique
+    constraint on PlanValue(item_id, month, level)). Averaging them (the old
+    behavior) blends the stale and corrected values. Instead, take only the
+    LATEST snapshot's value per (item, month) — same latest-snapshot-wins
+    rule _stock_by_item already applies to StockState."""
+    rows = (session.query(PlanValue.item_id, PlanValue.month, PlanValue.value,
+                          PlanValue.snapshot_id, Snapshot.file_mtime)
+            .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
             .filter(PlanValue.level == "master", PlanValue.item_id.isnot(None),
                     PlanValue.value.isnot(None))
-            .group_by(PlanValue.item_id, PlanValue.month).all())
+            .order_by(PlanValue.item_id, PlanValue.month,
+                     Snapshot.file_mtime.asc(), PlanValue.snapshot_id.asc())
+            .all())
     out: dict[int, dict[date, float]] = {}
-    for item_id, month, value in rows:
+    for item_id, month, value, _snapshot_id, _file_mtime in rows:
         if isinstance(month, str):                      # SQLite returns ISO strings
             month = date.fromisoformat(month)
-        out.setdefault(item_id, {})[month] = float(value)
+        out.setdefault(item_id, {})[month] = float(value)   # later (latest) overwrites
     return out
 
 
@@ -65,11 +72,15 @@ def _unbiased_score(obs: dict[date, float], start: date) -> dict | None:
     if chosen not in final["wapes"]:
         chosen = (baseline.DEFAULT_METHOD if baseline.DEFAULT_METHOD
                   in final["wapes"] else min(final["wapes"], key=final["wapes"].get))
+    m1_err = final["m1_err"].get(chosen)
+    m1_actual = final["m1_actual"]
+    wape_m1 = round(100 * m1_err / m1_actual, 2) if m1_actual else None
     return {"wape": final["wapes"][chosen],
             "naive_wape": final["wapes"].get("flat6"),
+            "wape_m1": wape_m1,
             "chosen": chosen, "actual_total": final["actual_total"],
-            "m1_err": final["m1_err"].get(chosen), "m1_naive_err": final["m1_err"].get("flat6"),
-            "m1_actual": final["m1_actual"]}
+            "m1_err": m1_err, "m1_naive_err": final["m1_err"].get("flat6"),
+            "m1_actual": m1_actual}
 
 
 def generate(session=None, horizon: int = DEFAULT_HORIZON,
@@ -111,7 +122,7 @@ def generate(session=None, horizon: int = DEFAULT_HORIZON,
                 session.add(AccuracyScore(run_id=run.id, item_id=item_id,
                                           category=item.category if item else None,
                                           month=start, level="baseline",
-                                          wape=score["wape"]))
+                                          wape=score["wape"], wape_m1=score["wape_m1"]))
 
         tier2_summary = tier2_forecasting.generate_tier2(
             session, run, series, items, already_forecasted, start)

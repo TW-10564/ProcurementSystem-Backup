@@ -72,7 +72,7 @@ def compute_mismatch(session) -> dict:
         v = (session.query(PlanValue.value)
             .filter(PlanValue.item_id == item_id, PlanValue.level == "master",
                     PlanValue.month == month).first())
-        return v[0] if v else 0.0
+        return (v[0] or 0.0) if v else 0.0
 
     cpu_by_socket: dict[str, float] = {}
     for item in cpu:
@@ -165,6 +165,39 @@ def historical_scan(session, min_cpu_demand: float = 50.0) -> list[dict]:
     return out
 
 
+MIN_PERSISTENT_MONTHS = 6
+MIN_GAP_PCT = 100.0
+
+
+def acceptance_test(hist: list[dict]) -> dict:
+    """M3 acceptance check as a REAL assertion (FIX_PLAN H2) — the previous
+    version printed an unconditional "PASS" with no pass/fail condition at
+    all, and would raise IndexError/ValueError on an empty or short `hist`
+    instead of reporting FAIL. Explicit thresholds: the top-gap socket must
+    show a >MIN_GAP_PCT% divergence in at least MIN_PERSISTENT_MONTHS
+    separate months to count as a persistent, reproducible mismatch rather
+    than a one-off data blip."""
+    if not hist:
+        return {"passed": False,
+               "message": "FAIL — no CPU/MB socket-family history found to "
+               "scan (empty result, not a mismatch finding)"}
+    socket = hist[0]["socket"]
+    persistent = [r for r in hist if r["socket"] == socket and abs(r["pct"]) > MIN_GAP_PCT]
+    if len(persistent) < MIN_PERSISTENT_MONTHS:
+        return {"passed": False, "socket": socket, "persistent_months": len(persistent),
+               "message": f"FAIL — {socket} shows only {len(persistent)} month(s) with "
+               f">{MIN_GAP_PCT:.0f}% gap (need >= {MIN_PERSISTENT_MONTHS} to call it a "
+               "persistent mismatch, not a data blip)"}
+    return {"passed": True, "socket": socket, "persistent_months": len(persistent),
+           "message": f"PASS — {socket} shows a PERSISTENT mismatch (>{MIN_GAP_PCT:.0f}% "
+           f"gap in {len(persistent)} separate months from "
+           f"{min(r['month'] for r in persistent)} to "
+           f"{max(r['month'] for r in persistent)}), not a one-off data blip. This is "
+           "exactly the shape of mismatch the gate exists to catch — cause (legitimate "
+           "board-only demand vs a genuine over-forecast) needs confirmation with "
+           "planning/purchasing."}
+
+
 def run() -> dict:
     print("=== M3: compatibility rule drafting + mismatch gate ===")
     session = get_session()
@@ -198,15 +231,11 @@ def run() -> dict:
     for r in hist[:10]:
         print(f"{r['month']:<12}{r['socket']:<10}{r['cpu_demand']:>12}"
               f"{r['mb_demand']:>12}{r['pct']:>9}%")
-    persistent = [r for r in hist if r["socket"] == hist[0]["socket"] and abs(r["pct"]) > 100]
-    print(f"\n[acceptance test] PASS — {hist[0]['socket']} shows a PERSISTENT mismatch "
-          f"(>100% gap in {len(persistent)} separate months from "
-          f"{min(r['month'] for r in persistent)} to {max(r['month'] for r in persistent)}), "
-          "not a one-off data blip. This is exactly the shape of mismatch the gate "
-          "exists to catch — cause (legitimate board-only demand vs a genuine "
-          "over-forecast) needs confirmation with planning/purchasing.")
+    result = acceptance_test(hist)
+    print(f"\n[acceptance test] {result['message']}")
     session.close()
-    return {"draft": draft_stats, "mismatch": mismatch, "historical_scan": hist[:20]}
+    return {"draft": draft_stats, "mismatch": mismatch, "historical_scan": hist[:20],
+           "acceptance_test": result}
 
 
 if __name__ == "__main__":

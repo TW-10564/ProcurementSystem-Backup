@@ -26,6 +26,19 @@ function Bar({ value, max, color }: { value: number; max: number; color: string 
   );
 }
 
+/* in-table magnitude bar: fixed track, semantic fill */
+function MiniBar({ value, max, color, width = 90 }: { value: number; max: number; color?: string; width?: number }) {
+  const pct = Math.max(2, Math.min(100, (value / max) * 100));
+  return (
+    <span className="minibar dim-track" style={{ width }}>
+      <span
+        className="minibar"
+        style={{ width: `${pct}%`, display: "block", ...(color ? { background: color } : {}) }}
+      />
+    </span>
+  );
+}
+
 export default function Accuracy() {
   const { t, lang } = useLang();
   const [report, setReport] = useState<BacktestReport | null>(null);
@@ -44,210 +57,349 @@ export default function Accuracy() {
     ? Math.max(report.avg_flat_wape, report.avg_last_year_wape, report.avg_seasonal_wape) * 1.15
     : 1;
 
+  // head-to-head verdict: one-off matched month (same target, same conditions)
+  const matched = planner?.historical_reference.one_off_matched_month ?? null;
+  const perSku = planner?.historical_reference.per_sku_level ?? null;
+  const catLevel = planner?.historical_reference.category_level ?? null;
+  const systemWins = matched ? matched.system.wape < matched.planner.wape : false;
+  const gapPts = matched ? Math.abs(matched.planner.wape - matched.system.wape) : 0;
+  const gapStr = gapPts.toFixed(1);
+  const h2hMax = matched ? Math.max(matched.system.wape, matched.planner.wape) * 1.15 : 1;
+  const catMax = catLevel
+    ? Math.max(...catLevel.series.map((r) => r.wape), catLevel.our_equivalent.wape) * 1.1
+    : 1;
+
   return (
     <div>
-      <div className="page-head">
+      {/* ── hero band ─────────────────────────────────────────── */}
+      <div className="hero">
         <h2>{t("accuracy_title")}</h2>
         <p>{t("accuracy_sub")}</p>
-      </div>
-
-      <div className="card">
-        <div className="hd">
-          <div>
-            <h3>{t("planner_title")}</h3>
-            <div className="desc">{t("planner_sub")}</div>
+        <div className="stats">
+          <div className="stat">
+            <div className="lab">{lang === "ja" ? "システム WAPE（同一月比較）" : "System WAPE (matched month)"}</div>
+            <div className="val">
+              {matched ? matched.system.wape : "—"}
+              <small>%</small>
+            </div>
+          </div>
+          <div className="stat">
+            <div className="lab">{lang === "ja" ? "プランナー WAPE（同一月比較）" : "Planner WAPE (matched month)"}</div>
+            <div className="val">
+              {matched ? matched.planner.wape : "—"}
+              <small>%</small>
+            </div>
+          </div>
+          <div className="stat">
+            <div className="lab">{lang === "ja" ? "採点対象の調整" : "Scoreable adjustments"}</div>
+            <div className="val">{fva ? fva.scoreable_count : "—"}</div>
+          </div>
+          <div className="stat">
+            <div className="lab">{lang === "ja" ? "バックテスト期間数" : "Backtest periods"}</div>
+            <div className="val">{report ? report.n_periods : "—"}</div>
           </div>
         </div>
-        {!planner ? (
+      </div>
+
+      {!planner ? (
+        <div className="card">
           <div className="empty">{t("common_loading")}</div>
-        ) : (
-          <div style={{ padding: "18px 24px", display: "grid", gap: 22 }}>
-            {/* live tracking status */}
-            <div>
-              <h4 style={{ margin: "0 0 8px", fontSize: "0.95rem" }}>
-                {t("planner_live_title")}
-              </h4>
-              {planner.gradeable > 0 ? (
-                <div className="kpis" style={{ marginBottom: 0 }}>
-                  <div className="kpi">
-                    <div className="lab">{t("planner_live_gradeable")}</div>
-                    <div className="val">{planner.gradeable}</div>
+        </div>
+      ) : (
+        <>
+          {/* ── verdict ───────────────────────────────────────── */}
+          {matched && (
+            <div className={`card stripe-card ${systemWins ? "green" : "amber"}`} style={{ marginBottom: 18 }}>
+              <div style={{ padding: "18px 24px", display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+                <div className={`icon-tile ${systemWins ? "green" : "amber"}`}>{systemWins ? "🏆" : "⚖️"}</div>
+                <div style={{ flex: 1, minWidth: 260 }}>
+                  <div className="eyebrow">
+                    {lang === "ja" ? "判定 — 同一月・直接比較" : "Verdict — matched-month head-to-head"}
                   </div>
-                  <div className="kpi">
-                    <div className="lab">{t("planner_live_wape")}</div>
-                    <div className="val" style={{ color: "var(--amber)" }}>
-                      {planner.wape}%
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="banner info">
-                  ℹ️ {planner.note} {t("planner_live_pending")}
-                </div>
-              )}
-            </div>
-
-            {/* ① category level */}
-            <div>
-              <h4 style={{ margin: "0 0 6px", fontSize: "0.95rem" }}>
-                {t("planner_cat_title")}
-              </h4>
-              <div className="desc" style={{ marginBottom: 10 }}>
-                {t("planner_cat_desc")}
-              </div>
-              <div className="tablewrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>{t("planner_th_category")}</th>
-                      <th>{t("planner_th_period")}</th>
-                      <th className="num">{t("planner_th_months")}</th>
-                      <th className="num">{t("planner_th_wape")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {planner.historical_reference.category_level.series.map((r, i) => (
-                      <tr key={i}>
-                        <td>{r.category}</td>
-                        <td className="dim mono">{r.range}</td>
-                        <td className="num mono dim">{r.months}</td>
-                        <td
-                          className="num mono"
-                          style={{ fontWeight: 700, color: r.wape > 60 ? "var(--red)" : undefined }}
-                        >
-                          {r.wape}%
-                        </td>
-                      </tr>
-                    ))}
-                    <tr style={{ borderTop: "2px solid var(--line)" }}>
-                      <td style={{ fontWeight: 700 }} colSpan={2}>
-                        {t("planner_our_row")}
-                      </td>
-                      <td></td>
-                      <td className="num mono" style={{ fontWeight: 700, color: "var(--green)" }}>
-                        {planner.historical_reference.category_level.our_equivalent.wape}%
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <div className="banner info" style={{ marginTop: 10 }}>
-                ✅ <b>{t("planner_cat_conclusion_label")}:</b>{" "}
-                {t("planner_cat_conclusion")}
-              </div>
-            </div>
-
-            {/* ② per-SKU level */}
-            <div>
-              <h4 style={{ margin: "0 0 6px", fontSize: "0.95rem" }}>
-                {t("planner_sku_title")}
-              </h4>
-              <div className="desc" style={{ marginBottom: 10 }}>
-                {t("planner_sku_desc")}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                <div className="card" style={{ margin: 0 }}>
-                  <div style={{ padding: "12px 16px", fontWeight: 700, borderBottom: "1px solid var(--line)" }}>
-                    {t("planner_sku_planner_label")}
-                  </div>
-                  <div className="kpis" style={{ margin: 0, padding: 14 }}>
-                    <div className="kpi">
-                      <div className="lab">{t("planner_sku_per_sku")}</div>
-                      <div className="val">
-                        {planner.historical_reference.per_sku_level.wape_per_sku}%
-                      </div>
-                    </div>
-                    <div className="kpi">
-                      <div className="lab">{t("planner_sku_total")}</div>
-                      <div className="val">
-                        {planner.historical_reference.per_sku_level.wape_channel_total}%
-                      </div>
-                    </div>
+                  <div className="statline" style={{ marginTop: 4 }}>
+                    <span className="n">
+                      {systemWins
+                        ? lang === "ja" ? "システム予測が優勢" : "System forecast leads"
+                        : lang === "ja" ? "プランナーが優勢" : "Planner leads"}
+                    </span>
+                    <span className={`delta ${systemWins ? "good" : "bad"}`}>
+                      {systemWins ? "▲" : "▼"} {gapStr}pt
+                    </span>
+                    <span className="c">
+                      {lang === "ja"
+                        ? `WAPE差 ・ 対象 ${matched.target_month} ・ ${matched.system.n_skus} SKU`
+                        : `WAPE gap · target ${matched.target_month} · ${matched.system.n_skus} SKUs`}
+                    </span>
                   </div>
                 </div>
-                <div className="card" style={{ margin: 0 }}>
-                  <div style={{ padding: "12px 16px", fontWeight: 700, borderBottom: "1px solid var(--line)" }}>
-                    {t("planner_sku_our_label")}
-                  </div>
-                  <div className="kpis" style={{ margin: 0, padding: 14 }}>
-                    <div className="kpi">
-                      <div className="lab">{t("planner_sku_overall")}</div>
-                      <div className="val">
-                        {planner.historical_reference.per_sku_level.our_equivalent.overall_6mo_wape}%
-                      </div>
-                    </div>
-                    <div className="kpi">
-                      <div className="lab">{t("planner_sku_nearterm")}</div>
-                      <div className="val" style={{ color: "var(--green)" }}>
-                        {planner.historical_reference.per_sku_level.our_equivalent.near_term_m1_wape}%
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <div className="pill">{t("planner_month_title")}</div>
               </div>
-              <div className="banner warn" style={{ marginTop: 10 }}>
-                ⚠️ {t("planner_sku_conclusion")}
-              </div>
-            </div>
-
-            {/* ③ one-off matched month */}
-            <div>
-              <h4 style={{ margin: "0 0 6px", fontSize: "0.95rem" }}>
-                {t("planner_month_title")}
-              </h4>
-              <div className="desc" style={{ marginBottom: 10 }}>
-                {t("planner_month_desc")}
-              </div>
-              <div className="tablewrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th></th>
-                      <th className="num">{t("planner_th_wape")}</th>
-                      <th>{t("dash_th_period")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td style={{ fontWeight: 600 }}>{t("planner_sku_planner_label")}</td>
-                      <td className="num mono" style={{ fontWeight: 700 }}>
-                        {planner.historical_reference.one_off_matched_month.planner.wape}%
-                      </td>
-                      <td className="dim">
-                        {t("planner_month_lead", {
-                          lead: planner.historical_reference.one_off_matched_month.planner.lead_time,
-                        })}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style={{ fontWeight: 600 }}>{t("planner_sku_our_label")}</td>
-                      <td className="num mono" style={{ fontWeight: 700 }}>
-                        {planner.historical_reference.one_off_matched_month.system.wape}%
-                      </td>
-                      <td className="dim">
-                        {t("planner_month_lead", {
-                          lead: planner.historical_reference.one_off_matched_month.system.lead_time,
-                        })}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <div className="banner info" style={{ marginTop: 10 }}>
+              <div className="banner info" style={{ margin: "0 24px 18px" }}>
                 ℹ️ {t("planner_month_conclusion")}
               </div>
             </div>
+          )}
 
-            <div className="dim" style={{ fontSize: "0.82rem", borderTop: "1px solid var(--line)", paddingTop: 14 }}>
-              <b>{t("planner_settle_title")}:</b> {t("planner_settle_body")}
+          {/* ── head-to-head cards ────────────────────────────── */}
+          <div className="grid2" style={{ marginBottom: 18 }}>
+            {/* system */}
+            <div className="card stripe-card brand" style={{ margin: 0 }}>
+              <div className="hd">
+                <div>
+                  <div className="eyebrow">{lang === "ja" ? "AI ベースライン" : "AI baseline"}</div>
+                  <h3>{t("planner_sku_our_label")}</h3>
+                </div>
+                {matched && systemWins && (
+                  <span className="delta good">▲ {lang === "ja" ? "優勢" : "ahead"}</span>
+                )}
+              </div>
+              <div style={{ padding: "16px 24px", display: "grid", gap: 14 }}>
+                {matched && (
+                  <div>
+                    <div className="statline">
+                      <span className="n" style={{ color: "var(--green)" }}>{matched.system.wape}%</span>
+                      <span className="c">
+                        WAPE ・ {t("planner_month_lead", { lead: matched.system.lead_time })}
+                      </span>
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <MiniBar value={matched.system.wape} max={h2hMax} color="var(--green)" width={220} />
+                    </div>
+                  </div>
+                )}
+                {perSku && (
+                  <div style={{ display: "flex", gap: 28, flexWrap: "wrap", borderTop: "1px solid var(--line2)", paddingTop: 12 }}>
+                    <div>
+                      <div className="eyebrow">{t("planner_sku_overall")}</div>
+                      <div className="statline">
+                        <span className="n" style={{ fontSize: "1.15rem" }}>{perSku.our_equivalent.overall_6mo_wape}%</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="eyebrow">{t("planner_sku_nearterm")}</div>
+                      <div className="statline">
+                        <span className="n" style={{ fontSize: "1.15rem", color: "var(--green)" }}>
+                          {perSku.our_equivalent.near_term_m1_wape}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* planner */}
+            <div className="card stripe-card amber" style={{ margin: 0 }}>
+              <div className="hd">
+                <div>
+                  <div className="eyebrow">{lang === "ja" ? "人手による計画" : "Human planning"}</div>
+                  <h3>{t("planner_sku_planner_label")}</h3>
+                </div>
+                {matched && !systemWins && (
+                  <span className="delta good">▲ {lang === "ja" ? "優勢" : "ahead"}</span>
+                )}
+                {matched && systemWins && (
+                  <span className="delta bad">▼ {gapStr}pt</span>
+                )}
+              </div>
+              <div style={{ padding: "16px 24px", display: "grid", gap: 14 }}>
+                {matched && (
+                  <div>
+                    <div className="statline">
+                      <span className="n" style={{ color: "var(--amber)" }}>{matched.planner.wape}%</span>
+                      <span className="c">
+                        WAPE ・ {t("planner_month_lead", { lead: matched.planner.lead_time })}
+                      </span>
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <MiniBar value={matched.planner.wape} max={h2hMax} color="var(--amber)" width={220} />
+                    </div>
+                  </div>
+                )}
+                {perSku && (
+                  <div style={{ display: "flex", gap: 28, flexWrap: "wrap", borderTop: "1px solid var(--line2)", paddingTop: 12 }}>
+                    <div>
+                      <div className="eyebrow">{t("planner_sku_per_sku")}</div>
+                      <div className="statline">
+                        <span className="n" style={{ fontSize: "1.15rem" }}>{perSku.wape_per_sku}%</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="eyebrow">{t("planner_sku_total")}</div>
+                      <div className="statline">
+                        <span className="n" style={{ fontSize: "1.15rem" }}>{perSku.wape_channel_total}%</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="eyebrow">{lang === "ja" ? "対象" : "Scope"}</div>
+                      <div className="statline">
+                        <span className="n" style={{ fontSize: "1.15rem" }}>{perSku.models}</span>
+                        <span className="c">{lang === "ja" ? `機種 ・ ${perSku.months}ヶ月` : `models · ${perSku.months} mo`}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        )}
-      </div>
 
+          {/* ── deep dive: planner comparison detail ──────────── */}
+          <div className="card">
+            <div className="hd">
+              <div>
+                <h3>{t("planner_title")}</h3>
+                <div className="desc">{t("planner_sub")}</div>
+              </div>
+            </div>
+            <div style={{ padding: "18px 24px", display: "grid", gap: 22 }}>
+              {/* live tracking status */}
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>{t("planner_live_title")}</div>
+                {planner.gradeable > 0 ? (
+                  <div className="kpis" style={{ marginBottom: 0 }}>
+                    <div className="kpi">
+                      <div className="lab">{t("planner_live_gradeable")}</div>
+                      <div className="val">{planner.gradeable}</div>
+                    </div>
+                    <div className="kpi accent-amber">
+                      <div className="lab">{t("planner_live_wape")}</div>
+                      <div className="val" style={{ color: "var(--amber)" }}>
+                        {planner.wape}%
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="banner info">
+                    ℹ️ {planner.note} {t("planner_live_pending")}
+                  </div>
+                )}
+              </div>
+
+              {/* ① category level */}
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 4 }}>{t("planner_cat_title")}</div>
+                <div className="desc" style={{ marginBottom: 10 }}>
+                  {t("planner_cat_desc")}
+                </div>
+                <div className="tablewrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>{t("planner_th_category")}</th>
+                        <th>{t("planner_th_period")}</th>
+                        <th className="num">{t("planner_th_months")}</th>
+                        <th className="num">{t("planner_th_wape")}</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {planner.historical_reference.category_level.series.map((r, i) => (
+                        <tr key={i}>
+                          <td>{r.category}</td>
+                          <td className="dim mono">{r.range}</td>
+                          <td className="num mono dim">{r.months}</td>
+                          <td
+                            className="num mono"
+                            style={{ fontWeight: 700, color: r.wape > 60 ? "var(--red)" : undefined }}
+                          >
+                            {r.wape}%
+                          </td>
+                          <td>
+                            <MiniBar
+                              value={r.wape}
+                              max={catMax}
+                              color={r.wape > 60 ? "var(--red)" : "var(--amber)"}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                      <tr style={{ borderTop: "2px solid var(--line)" }}>
+                        <td style={{ fontWeight: 700 }} colSpan={2}>
+                          {t("planner_our_row")}
+                        </td>
+                        <td></td>
+                        <td className="num mono" style={{ fontWeight: 700, color: "var(--green)" }}>
+                          {planner.historical_reference.category_level.our_equivalent.wape}%
+                        </td>
+                        <td>
+                          <MiniBar
+                            value={planner.historical_reference.category_level.our_equivalent.wape}
+                            max={catMax}
+                            color="var(--green)"
+                          />
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div className="banner info" style={{ marginTop: 10 }}>
+                  ✅ <b>{t("planner_cat_conclusion_label")}:</b>{" "}
+                  {t("planner_cat_conclusion")}
+                </div>
+              </div>
+
+              {/* ② per-SKU level — caveat */}
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 4 }}>{t("planner_sku_title")}</div>
+                <div className="desc" style={{ marginBottom: 10 }}>
+                  {t("planner_sku_desc")}
+                </div>
+                <div className="banner warn">
+                  ⚠️ {t("planner_sku_conclusion")}
+                </div>
+              </div>
+
+              {/* ③ one-off matched month — detail rows */}
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 4 }}>{t("planner_month_title")}</div>
+                <div className="desc" style={{ marginBottom: 10 }}>
+                  {t("planner_month_desc")}
+                </div>
+                {matched && (
+                  <div style={{ border: "1px solid var(--line2)", borderRadius: 10, overflow: "hidden" }}>
+                    <div className="list-row">
+                      <div className={`icon-tile ${systemWins ? "amber" : "green"}`} style={{ width: 30, height: 30 }}>
+                        👤
+                      </div>
+                      <div className="grow">
+                        <div className="ttl">{t("planner_sku_planner_label")}</div>
+                        <div className="meta">{t("planner_month_lead", { lead: matched.planner.lead_time })}</div>
+                      </div>
+                      <MiniBar value={matched.planner.wape} max={h2hMax} color="var(--amber)" />
+                      <span className="mono" style={{ fontWeight: 700, minWidth: 58, textAlign: "right" }}>
+                        {matched.planner.wape}%
+                      </span>
+                    </div>
+                    <div className="list-row">
+                      <div className={`icon-tile ${systemWins ? "green" : "amber"}`} style={{ width: 30, height: 30 }}>
+                        🤖
+                      </div>
+                      <div className="grow">
+                        <div className="ttl">{t("planner_sku_our_label")}</div>
+                        <div className="meta">{t("planner_month_lead", { lead: matched.system.lead_time })}</div>
+                      </div>
+                      <MiniBar value={matched.system.wape} max={h2hMax} color="var(--green)" />
+                      <span className="mono" style={{ fontWeight: 700, minWidth: 58, textAlign: "right", color: systemWins ? "var(--green)" : undefined }}>
+                        {matched.system.wape}%
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="dim" style={{ fontSize: "0.82rem", borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+                <b>{t("planner_settle_title")}:</b> {t("planner_settle_body")}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── FVA: did human adjustments help? ──────────────────── */}
       <div className="card">
         <div className="hd">
           <div>
+            <div className="eyebrow">FVA</div>
             <h3>{t("fva_title")}</h3>
             <div className="desc">{t("fva_desc")}</div>
           </div>
@@ -266,24 +418,37 @@ export default function Accuracy() {
               )}
             </div>
           ) : (
-            <div className="kpis" style={{ marginBottom: 0 }}>
-              <div className="kpi">
-                <div className="lab">{t("fva_scoreable_count")}</div>
-                <div className="val">{fva.scoreable_count}</div>
-              </div>
-              <div className="kpi">
-                <div className="lab">{t("fva_helped")}</div>
-                <div className="val" style={{ color: "var(--green)" }}>
-                  {fva.helped}
+            <>
+              <div className="kpis" style={{ marginBottom: 0 }}>
+                <div className="kpi">
+                  <div className="lab">{t("fva_scoreable_count")}</div>
+                  <div className="val">{fva.scoreable_count}</div>
+                </div>
+                <div className="kpi accent-green">
+                  <div className="lab">{t("fva_helped")}</div>
+                  <div className="val" style={{ color: "var(--green)" }}>
+                    {fva.helped}
+                  </div>
+                </div>
+                <div className="kpi accent-red">
+                  <div className="lab">{t("fva_hurt")}</div>
+                  <div className="val" style={{ color: "var(--red)" }}>
+                    {fva.hurt}
+                  </div>
                 </div>
               </div>
-              <div className="kpi">
-                <div className="lab">{t("fva_hurt")}</div>
-                <div className="val" style={{ color: "var(--red)" }}>
-                  {fva.hurt}
+              {fva.helped + fva.hurt > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <div className="stack-bar">
+                    <span style={{ width: `${(fva.helped / (fva.helped + fva.hurt)) * 100}%`, background: "var(--green)" }} />
+                    <span style={{ width: `${(fva.hurt / (fva.helped + fva.hurt)) * 100}%`, background: "var(--red)" }} />
+                  </div>
+                  <div className="dim" style={{ fontSize: "0.76rem", marginTop: 6 }}>
+                    {lang === "ja" ? "改善・悪化の内訳" : "Helped vs hurt breakdown"}
+                  </div>
                 </div>
-              </div>
-            </div>
+              )}
+            </>
           )}
           {rate && rate.rate_pct !== null && (
             <div className="dim" style={{ marginTop: 14, fontSize: "0.82rem" }}>
@@ -297,6 +462,7 @@ export default function Accuracy() {
         </div>
       </div>
 
+      {/* ── backtest: method benchmark ────────────────────────── */}
       {!report ? (
         <div className="empty">{t("common_loading")}</div>
       ) : (
@@ -304,6 +470,7 @@ export default function Accuracy() {
           <div className="card">
             <div className="hd">
               <div>
+                <div className="eyebrow">{lang === "ja" ? "手法ベンチマーク" : "Method benchmark"}</div>
                 <h3>{t("accuracy_wape_title")}</h3>
                 <div className="desc">{t("accuracy_wape_desc", { n: report.n_periods })}</div>
               </div>
@@ -314,8 +481,13 @@ export default function Accuracy() {
             <div style={{ padding: "20px 24px", display: "grid", gap: 18 }}>
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                  <span style={{ fontWeight: 700 }}>{t("accuracy_method_seasonal")}</span>
-                  <span className="mono">{report.avg_seasonal_wape}%</span>
+                  <span style={{ fontWeight: 700 }}>
+                    {t("accuracy_method_seasonal")}{" "}
+                    <span className="pill" style={{ marginLeft: 6 }}>
+                      {lang === "ja" ? "採用中" : "In use"}
+                    </span>
+                  </span>
+                  <span className="mono" style={{ fontWeight: 700 }}>{report.avg_seasonal_wape}%</span>
                 </div>
                 <Bar value={report.avg_seasonal_wape} max={maxWape} color="var(--green)" />
               </div>
@@ -347,6 +519,7 @@ export default function Accuracy() {
                     <th>{t("dash_th_period")}</th>
                     <th className="num">{t("accuracy_th_units")}</th>
                     <th className="num">{t("accuracy_th_seasonal")}</th>
+                    <th></th>
                     <th className="num">{t("accuracy_th_lastyear")}</th>
                     <th className="num">{t("accuracy_th_flat")}</th>
                   </tr>
@@ -358,6 +531,9 @@ export default function Accuracy() {
                       <td className="num mono">{r.total.toLocaleString()}</td>
                       <td className="num mono" style={{ color: "var(--green)", fontWeight: 700 }}>
                         {r.seasonal_wape}%
+                      </td>
+                      <td>
+                        <MiniBar value={r.seasonal_wape} max={maxWape} color="var(--green)" width={72} />
                       </td>
                       <td className="num mono dim">{r.last_year_wape}%</td>
                       <td className="num mono dim">{r.flat_wape}%</td>

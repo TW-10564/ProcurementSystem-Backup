@@ -29,3 +29,7 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# environment files (API keys) — never commit
+.env
+app/backend/.env

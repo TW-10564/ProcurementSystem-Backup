@@ -11,7 +11,8 @@ from .db import init_db, get_session, engine
 from .models import Base, Snapshot, PlanValue, StockState, Actual, Item
 from .ingestion import one_master, notepc_forecast, planning4, planning1, subfiles, sap
 from .ingestion.excel import file_meta
-from .registry.build import build_registry, resolve
+from .registry.build import (build_registry, resolve,
+                             build_normalized_alias_index, resolve_normalized)
 
 import sys
 from pathlib import Path as _Path
@@ -31,11 +32,35 @@ def _snapshot(session, path, sheet, rows, status, note=""):
     return snap
 
 
+def _resolve_planning1(session, norm_index, name):
+    """FIX_PLAN M4: try each documented naming-convention variant (see
+    ingestion/planning1.candidate_variants) against both exact and
+    normalized (width/spacing-insensitive) alias resolution before giving
+    up. Returns (item, used_variant) — used_variant lets the caller report
+    how many resolutions needed a variant vs matched as-is."""
+    for variant in planning1.candidate_variants(name):
+        item = resolve(session, variant)
+        if item is None:
+            item = resolve_normalized(norm_index, variant)
+        if item is not None:
+            return item, (variant != name)
+    return None, False
+
+
 def _ingest_plan_rows(session, snap, rows, level, resolved_counter):
     unresolved = 0
+    fuzzy_matched = 0
+    norm_index = build_normalized_alias_index(session) if level == "planning1" else None
     for p in rows:
         name = p.get("raw_name") or p.get("adana")
-        item = resolve(session, name)
+        if level == "planning1":
+            item = resolve(session, name)
+            if item is None:
+                item, _ = _resolve_planning1(session, norm_index, name)
+                if item is not None:
+                    fuzzy_matched += 1
+        else:
+            item = resolve(session, name)
         if item is None:
             unresolved += 1
         session.add(PlanValue(snapshot_id=snap.id, item_id=item.id if item else None,
@@ -46,6 +71,10 @@ def _ingest_plan_rows(session, snap, rows, level, resolved_counter):
     # silently discard whichever ran first from the Gate A report
     prev_res, prev_tot = resolved_counter.get(level, (0, 0))
     resolved_counter[level] = (prev_res + len(rows) - unresolved, prev_tot + len(rows))
+    if level == "planning1" and fuzzy_matched:
+        print(f"[①販売計画] {fuzzy_matched} rows recovered where plain exact matching "
+              f"failed — via width/spacing normalization or a naming-convention "
+              f"variant (ASR/RTX prefix, GB→G)")
     return unresolved
 
 
@@ -144,15 +173,28 @@ def run() -> dict:
                      "resolved_via_crosswalk": sap_result["resolved_via_crosswalk"]}
     if sap_result["path"]:
         matched = 0
+        matched_via_normalization = 0
+        norm_index = None   # built lazily, only if an exact match ever misses
         for adana, qty in sap_result["rows"].items():
             item = resolve(session, adana)
+            if item is None:
+                # FIX_PLAN M3: exact-string resolve() leaves a row unmatched
+                # when the あだ名 (direct or crosswalk-recovered) differs from
+                # the stored ONE alias only by width/spacing/hyphenation.
+                if norm_index is None:
+                    norm_index = build_normalized_alias_index(session)
+                item = resolve_normalized(norm_index, adana)
+                if item is not None:
+                    matched_via_normalization += 1
             if item:
                 matched += 1
             session.add(StockState(item_id=item.id if item else None, raw_name=adana,
                                    snapshot_date=sap_result["month"], sap_qty=qty))
         report["sap"]["matched"] = matched
+        report["sap"]["matched_via_normalization"] = matched_via_normalization
         print(f"[SAP] file={sap_result['path'].name}  あだ名={len(sap_result['rows'])}  "
-              f"matched={matched}  unnamed_rows={sap_result['unnamed']}  "
+              f"matched={matched} (of which {matched_via_normalization} via "
+              f"width/spacing normalization)  unnamed_rows={sap_result['unnamed']}  "
               f"resolved_via_name_crosswalk={sap_result['resolved_via_crosswalk']}")
     else:
         print("[SAP] no stock file found (glob miss) — skipped, non-blocking for M1")

@@ -17,6 +17,7 @@ class CompatRuleOut(BaseModel):
     origin: str
     status: str
     confirmed_by: str | None = None
+    note: str | None = None
 
     class Config:
         from_attributes = True

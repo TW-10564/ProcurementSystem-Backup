@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, downloadUrl } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
@@ -124,7 +124,7 @@ function ForecastChart({ detail, lang }: { detail: ForecastDetail; lang: string 
           y={y(a.qty ?? 0)}
           width={Math.max(1, bw - 2)}
           height={H - padB - y(a.qty ?? 0)}
-          fill={a.kind === "h" ? "#94a3b8" : "#2563eb"}
+          fill={a.kind === "h" ? "#a6adc4" : "#2c33b8"}
           opacity={a.kind === "h" ? 0.55 : 0.9}
         >
           <title>{`${fmtMonth(a.month, lang)}: ${fmtQty(a.qty)}`}</title>
@@ -151,10 +151,20 @@ function ForecastChart({ detail, lang }: { detail: ForecastDetail; lang: string 
   );
 }
 
+/** Small uppercase section label used inside the detail panel. */
+function SectionLabel({ children }: { children: import("react").ReactNode }) {
+  return (
+    <div className="eyebrow" style={{ margin: "18px 0 8px" }}>
+      {children}
+    </div>
+  );
+}
+
 export default function Forecast() {
   const { t, lang } = useLang();
   const [summary, setSummary] = useState<ForecastSummary | null>(null);
   const [list, setList] = useState<ForecastList | null>(null);
+  const [tier2Preview, setTier2Preview] = useState<ForecastList | null>(null);
   const [detail, setDetail] = useState<ForecastDetail | null>(null);
   const [q, setQ] = useState("");
   const [category, setCategory] = useState<string | null>(null);
@@ -162,12 +172,17 @@ export default function Forecast() {
   const [running, setRunning] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   const loadSummary = () =>
     api.forecastSummary().then(setSummary).catch((e) => setError(String(e.message ?? e)));
 
+  const loadTier2Preview = () =>
+    api.forecasts({ method: "tier2", limit: 10 }).then(setTier2Preview).catch(() => {});
+
   useEffect(() => {
     loadSummary();
+    loadTier2Preview();
   }, []);
 
   useEffect(() => {
@@ -188,6 +203,7 @@ export default function Forecast() {
       const r = await api.runForecast();
       setFlash(t("fc_run_done", { id: r.run_id }));
       await loadSummary();
+      await loadTier2Preview();
       setList(await api.forecasts({ q: q || undefined, category: category ?? undefined,
                                   method: methodFilter ?? undefined, limit: 80 }));
     } catch (e: unknown) {
@@ -225,22 +241,78 @@ export default function Forecast() {
     () => (summary ? summary.categories.reduce((s, c) => s + c.next3_total, 0) : 0),
     [summary],
   );
+  const maxNext12 = useMemo(
+    () =>
+      summary
+        ? Math.max(1, ...summary.categories.map((c) => c.next12_total))
+        : 1,
+    [summary],
+  );
   const monthCols = list?.months.slice(0, 6) ?? [];
 
   const methodLabel = (m: string | null) =>
     m && METHOD_KEY[m] ? t(METHOD_KEY[m]) : m ?? "—";
 
+  const viewAllTier2 = () => {
+    setCategory(null);
+    setMethodFilter("tier2");
+    listRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const lastRunAt = run_?.created_at
+    ? new Date(run_.created_at + "Z").toLocaleString(lang === "ja" ? "ja-JP" : "en-US")
+    : "—";
+
   return (
     <div>
-      <div className="page-head">
-        <h2>{t("fc_title")}</h2>
-        <p>{t("fc_sub")}</p>
+      {/* ── Analytical-list header: title + primary actions + run facts ── */}
+      <div className="hero" style={{ padding: "22px 30px" }}>
+        <div
+          style={{
+            display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+            gap: 16, flexWrap: "wrap", position: "relative",
+          }}
+        >
+          <div>
+            <h2>{t("fc_title")}</h2>
+            <p>{t("fc_sub")}</p>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+            <a className="btn" href={downloadUrl("/export/forecasts")}>
+              {t("common_download_excel")}
+            </a>
+            <button className="btn" onClick={run} disabled={running}>
+              {running ? t("fc_running") : t("fc_run")}
+            </button>
+          </div>
+        </div>
+        <div className="stats" style={{ marginTop: 14 }}>
+          <div className="stat">
+            <div className="lab">{lang === "ja" ? "最終実行" : "Last run"}</div>
+            <div className="val" style={{ fontSize: "1.05rem" }}>{lastRunAt}</div>
+          </div>
+          <div className="stat">
+            <div className="lab">{lang === "ja" ? "モデル" : "Model"}</div>
+            <div className="val" style={{ fontSize: "1.05rem" }}>
+              {run_?.method_version ?? "—"}
+            </div>
+          </div>
+          <div className="stat">
+            <div className="lab">{lang === "ja" ? "予測期間" : "Horizon"}</div>
+            <div className="val" style={{ fontSize: "1.05rem" }}>
+              {run_?.horizon != null
+                ? lang === "ja" ? `${run_.horizon}ヶ月` : `${run_.horizon} mo`
+                : "—"}
+            </div>
+          </div>
+        </div>
       </div>
 
       {error && <div className="banner warn">⚠️ {error}</div>}
       {flash && <div className="banner info">✅ {flash}</div>}
       {summary && !summary.run && <div className="banner info">ℹ️ {t("fc_no_run")}</div>}
 
+      {/* ── KPI band ── */}
       <div className="kpis">
         <div className="kpi">
           <div className="lab">{t("fc_kpi_items")}</div>
@@ -254,7 +326,7 @@ export default function Forecast() {
           <div className="val">{summary ? next3All.toLocaleString() : "—"}</div>
           <div className="sub">{t("fc_kpi_next3_sub")}</div>
         </div>
-        <div className="kpi">
+        <div className="kpi accent-amber">
           <div className="lab">{t("fc_kpi_orders")}</div>
           <div className="val" style={{ color: "var(--amber)" }}>
             {summary?.orders_needed ?? "—"}
@@ -270,7 +342,7 @@ export default function Forecast() {
               : "—"}
           </div>
         </div>
-        <div className="kpi">
+        <div className="kpi accent-green">
           <div className="lab">{t("fc_kpi_wape_near")}</div>
           <div className="val" style={{ color: "var(--green)" }}>
             {nearTerm ? `${nearTerm.wape}%` : "—"}
@@ -284,7 +356,7 @@ export default function Forecast() {
           onClick={() => setMethodFilter(methodFilter === "tier2" ? null : "tier2")}
           style={{
             cursor: "pointer",
-            outline: methodFilter === "tier2" ? "2px solid var(--indigo, #2563eb)" : undefined,
+            outline: methodFilter === "tier2" ? "2px solid var(--brand-500)" : undefined,
           }}
           title={t("fc_kpi_tier2_hint")}
         >
@@ -298,73 +370,167 @@ export default function Forecast() {
         </div>
       </div>
 
-      <div className="card">
-        <div className="hd">
-          <div>
-            <h3>{t("fc_cat_title")}</h3>
-            <div className="desc">
-              {t("fc_cat_desc")}
-              {run_?.created_at && (
-                <>
-                  {" — "}
-                  {t("fc_last_run", {
-                    at: new Date(run_.created_at + "Z").toLocaleString(
-                      lang === "ja" ? "ja-JP" : "en-US",
-                    ),
+      {/* ── Category breakdown + Tier-2 side by side when both exist ── */}
+      <div className={tier2 && tier2Total > 0 ? "grid-13" : undefined}>
+        <div className="card">
+          <div className="hd">
+            <div>
+              <h3>{t("fc_cat_title")}</h3>
+              <div className="desc">
+                {t("fc_cat_desc")}
+                {run_?.created_at && (
+                  <>
+                    {" — "}
+                    {t("fc_last_run", { at: lastRunAt })}
+                  </>
+                )}
+              </div>
+            </div>
+            {category && (
+              <button className="chip on" onClick={() => setCategory(null)} title={t("fc_filter_all")}>
+                {category} ✕
+              </button>
+            )}
+          </div>
+          {summary ? (
+            <div className="tablewrap" style={{ maxHeight: 420 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t("fc_th_category")}</th>
+                    <th className="num">{t("fc_th_items")}</th>
+                    <th className="num">{t("fc_th_next3")}</th>
+                    <th className="num">{t("fc_th_next12")}</th>
+                    <th style={{ width: 96 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.categories.map((c) => {
+                    const selected = category === c.category;
+                    return (
+                      <tr
+                        key={c.category}
+                        onClick={() => setCategory(selected ? null : c.category)}
+                        style={{
+                          cursor: "pointer",
+                          background: selected ? "var(--brand-bg, rgba(30,33,136,0.08))" : undefined,
+                          boxShadow: selected
+                            ? "inset 3px 0 0 var(--brand-500)"
+                            : undefined,
+                        }}
+                      >
+                        <td style={{ fontWeight: 600 }}>{c.category}</td>
+                        <td className="num mono dim">{c.items}</td>
+                        <td className="num mono">{c.next3_total.toLocaleString()}</td>
+                        <td className="num mono" style={{ fontWeight: 700 }}>
+                          {c.next12_total.toLocaleString()}
+                        </td>
+                        <td>
+                          <span
+                            className="minibar"
+                            style={{
+                              width: `${Math.max(3, Math.round((c.next12_total / maxNext12) * 88))}px`,
+                              opacity: selected ? 1 : 0.85,
+                            }}
+                            title={c.next12_total.toLocaleString()}
+                          />
+                        </td>
+                      </tr>
+                    );
                   })}
-                </>
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="empty">{t("common_loading")}</div>
+          )}
+        </div>
+
+        {tier2 && tier2Total > 0 && (
+          <div className="card stripe-card brand">
+            <div className="hd">
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 3 }}>
+                  {lang === "ja" ? "TIER-2 / 購買部門" : "TIER-2 / PURCHASING"}
+                </div>
+                <h3>{t("fc_tier2_title")}</h3>
+                <div className="desc">{t("fc_tier2_desc")}</div>
+              </div>
+              <button className="btn" onClick={viewAllTier2}>
+                {t("fc_tier2_view_all")}
+              </button>
+            </div>
+            <div
+              style={{
+                display: "flex", gap: 32, flexWrap: "wrap", alignItems: "center",
+                padding: "2px 24px 14px",
+              }}
+            >
+              <div className="statline">
+                <span className="n">{tier2.items_forecasted.toLocaleString()}</span>
+                <span className="c">{t("fc_tier2_attach")}</span>
+              </div>
+              <div className="statline">
+                <span className="n">
+                  {tier2.category_fallback.items_forecasted.toLocaleString()}
+                </span>
+                <span className="c">{t("fc_tier2_category")}</span>
+              </div>
+              {tier2.category_fallback.leave_one_out_wape !== null && (
+                <div className="statline">
+                  <span className="n">{tier2.category_fallback.leave_one_out_wape}%</span>
+                  <span className="c">{t("fc_tier2_loo_wape")}</span>
+                </div>
               )}
             </div>
+            <div className="eyebrow" style={{ padding: "0 24px 6px" }}>
+              {t("fc_tier2_top_title")}
+            </div>
+            {tier2Preview && tier2Preview.rows.length > 0 ? (
+              <div className="tablewrap" style={{ maxHeight: 320 }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{t("fc_th_item")}</th>
+                      <th>{t("fc_th_category")}</th>
+                      <th>{t("fc_th_method")}</th>
+                      <th className="num">{t("fc_th_wape")}</th>
+                      <th className="num">{t("fc_th_total12")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tier2Preview.rows.map((r) => (
+                      <tr key={r.item_id} onClick={() => openDetail(r.item_id)} style={{ cursor: "pointer" }}>
+                        <td style={{ fontWeight: 600 }}>{r.name}</td>
+                        <td className="dim">{r.category ?? "—"}</td>
+                        <td className="dim">{methodLabel(r.method)}</td>
+                        <td className="num mono dim"
+                            title={r.wape_full_horizon !== null
+                                  ? t("fc_wape_full_horizon_tooltip", { wape: r.wape_full_horizon })
+                                  : undefined}>
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end" }}>
+                            <ConfidenceDot wape={r.wape} />
+                            {r.wape !== null ? `${r.wape}%` : "—"}
+                          </span>
+                        </td>
+                        <td className="num mono" style={{ fontWeight: 700 }}>
+                          {r.next12_total.toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="empty">{t("common_loading")}</div>
+            )}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <a className="btn" href={downloadUrl("/export/forecasts")}>
-              {t("common_download_excel")}
-            </a>
-            <button className="btn" onClick={run} disabled={running}>
-              {running ? t("fc_running") : `🔄 ${t("fc_run")}`}
-            </button>
-          </div>
-        </div>
-        {summary ? (
-          <div className="tablewrap" style={{ maxHeight: 280 }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>{t("fc_th_category")}</th>
-                  <th className="num">{t("fc_th_items")}</th>
-                  <th className="num">{t("fc_th_next3")}</th>
-                  <th className="num">{t("fc_th_next12")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.categories.map((c) => (
-                  <tr
-                    key={c.category}
-                    onClick={() =>
-                      setCategory(category === c.category ? null : c.category)
-                    }
-                    style={{
-                      cursor: "pointer",
-                      background:
-                        category === c.category ? "rgba(37,99,235,0.12)" : undefined,
-                    }}
-                  >
-                    <td style={{ fontWeight: 600 }}>{c.category}</td>
-                    <td className="num mono">{c.items}</td>
-                    <td className="num mono">{c.next3_total.toLocaleString()}</td>
-                    <td className="num mono">{c.next12_total.toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="empty">{t("common_loading")}</div>
         )}
       </div>
 
+      {/* ── Detail panel ── */}
       {detail && (
-        <div className="card">
+        <div className="card stripe-card brand" style={{ marginTop: 18 }}>
           <div className="hd">
             <div>
               <h3>{t("fc_detail_title", { name: detail.item.name })}</h3>
@@ -383,49 +549,59 @@ export default function Forecast() {
               {t("fc_detail_close")}
             </button>
           </div>
-          <div style={{ padding: "14px 24px 20px" }}>
+          <div style={{ padding: "6px 24px 22px" }}>
+            <SectionLabel>{lang === "ja" ? "チャート" : "Chart"}</SectionLabel>
             <div className="dim" style={{ fontSize: "0.8rem", marginBottom: 8 }}>
-              <span style={{ color: "#94a3b8" }}>■</span> {t("fc_legend_history")}{"  "}
-              <span style={{ color: "#2563eb" }}>■</span> {t("fc_legend_forecast")}{"  "}
+              <span style={{ color: "#a6adc4" }}>■</span> {t("fc_legend_history")}{"  "}
+              <span style={{ color: "#2c33b8" }}>■</span> {t("fc_legend_forecast")}{"  "}
               <span style={{ color: "#d97706" }}>┅</span> {t("fc_legend_plan")}
             </div>
             <ForecastChart detail={detail} lang={lang} />
-            <div className="dim" style={{ fontSize: "0.8rem", margin: "8px 0 14px", display: "flex", alignItems: "center" }}>
+            <div className="dim" style={{ fontSize: "0.8rem", margin: "8px 0 4px", display: "flex", alignItems: "center" }}>
               <ConfidenceDot wape={detail.wape} />
               {detail.wape !== null
                 ? t("fc_detail_wape_note", { wape: detail.wape })
                 : t("fc_detail_no_wape", { method: methodLabel(detail.method) })}
             </div>
-
-            {detail.weekly.length > 0 && (
-              <div className="card" style={{ margin: "0 0 16px", background: "var(--indigo-bg, rgba(37,99,235,0.06))" }}>
-                <div style={{ padding: "12px 16px 4px", fontWeight: 700, fontSize: "0.9rem" }}>
-                  {t("fc_weekly_title")}
-                </div>
-                <div className="dim" style={{ fontSize: "0.78rem", padding: "0 16px 10px" }}>
-                  {t("fc_weekly_desc")}
-                </div>
-                <div className="tablewrap" style={{ maxHeight: 200, padding: "0 4px 8px" }}>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>{t("fc_weekly_th_week")}</th>
-                        <th className="num">{t("fc_weekly_th_qty")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detail.weekly.map((w) => (
-                        <tr key={w.week_start}>
-                          <td className="mono">{fmtMonth(w.week_start, lang)} ({w.week_start.slice(8, 10)})</td>
-                          <td className="num mono">{fmtQty(w.qty)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+            {detail.wape_full_horizon !== null && (
+              <div className="dim" style={{ fontSize: "0.76rem", margin: "0 0 4px" }}>
+                {t("fc_detail_wape_full_horizon_note", { wape: detail.wape_full_horizon })}
               </div>
             )}
 
+            {detail.weekly.length > 0 && (
+              <>
+                <SectionLabel>{lang === "ja" ? "週次" : "Weekly"}</SectionLabel>
+                <div className="card" style={{ margin: "0 0 4px", background: "var(--indigo-bg, rgba(37,99,235,0.06))" }}>
+                  <div style={{ padding: "12px 16px 4px", fontWeight: 700, fontSize: "0.9rem" }}>
+                    {t("fc_weekly_title")}
+                  </div>
+                  <div className="dim" style={{ fontSize: "0.78rem", padding: "0 16px 10px" }}>
+                    {t("fc_weekly_desc")}
+                  </div>
+                  <div className="tablewrap" style={{ maxHeight: 200, padding: "0 4px 8px" }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>{t("fc_weekly_th_week")}</th>
+                          <th className="num">{t("fc_weekly_th_qty")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detail.weekly.map((w) => (
+                          <tr key={w.week_start}>
+                            <td className="mono">{fmtMonth(w.week_start, lang)} ({w.week_start.slice(8, 10)})</td>
+                            <td className="num mono">{fmtQty(w.qty)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <SectionLabel>{lang === "ja" ? "発注提案" : "Order suggestion"}</SectionLabel>
             {detail.suggestion === null ? (
               <div className="banner info">ℹ️ {t("fc_sugg_no_stock")}</div>
             ) : detail.suggestion.action === "suggest_order" ? (
@@ -448,7 +624,8 @@ export default function Forecast() {
               <div className="banner info">✅ {t("fc_sugg_none")}</div>
             )}
 
-            <div className="tablewrap" style={{ marginTop: 14, maxHeight: 260 }}>
+            <SectionLabel>{lang === "ja" ? "月次" : "Monthly"}</SectionLabel>
+            <div className="tablewrap" style={{ maxHeight: 260 }}>
               <table>
                 <thead>
                   <tr>
@@ -478,7 +655,7 @@ export default function Forecast() {
                                 {fmtQty(adj.baseline)}
                               </span>
                               <span style={{ fontWeight: 700, color: "var(--amber)" }}>
-                                ✍️ {fmtQty(f.qty)}
+                                {fmtQty(f.qty)}
                               </span>
                             </span>
                           ) : (
@@ -502,43 +679,37 @@ export default function Forecast() {
         </div>
       )}
 
-      <div className="card">
+      {/* ── Main SKU list ── */}
+      <div className="card" ref={listRef} style={{ marginTop: 18 }}>
         <div className="hd">
           <div>
             <h3>{t("fc_list_title")}</h3>
             <div className="desc">{t("fc_list_desc")}</div>
           </div>
+        </div>
+        <div className="toolbar">
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder={t("fc_search_placeholder")}
             style={{ minWidth: 260 }}
           />
-        </div>
-        {(category || methodFilter) && (
-          <div style={{ padding: "8px 24px 0", display: "flex", gap: 8 }}>
-            {category && (
-              <button className="btn" onClick={() => setCategory(null)}>
-                {category} ✕ {t("fc_filter_all")}
-              </button>
-            )}
-            {methodFilter && (
-              <button className="btn" onClick={() => setMethodFilter(null)}>
-                {t("fc_kpi_tier2")} ✕ {t("fc_filter_all")}
-              </button>
-            )}
-          </div>
-        )}
-        <div
-          className="dim"
-          style={{
-            display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
-            padding: "10px 24px 0", fontSize: "0.78rem",
-          }}
-        >
-          <span>{t("fc_confidence_legend")}</span>
+          {category && (
+            <button className="chip on" onClick={() => setCategory(null)} title={t("fc_filter_all")}>
+              {category} ✕
+            </button>
+          )}
+          {methodFilter && (
+            <button className="chip on" onClick={() => setMethodFilter(null)} title={t("fc_filter_all")}>
+              {t("fc_kpi_tier2")} ✕
+            </button>
+          )}
+          <span style={{ flex: 1 }} />
+          <span className="dim" style={{ fontSize: "0.74rem" }}>
+            {t("fc_confidence_legend")}
+          </span>
           {(["good", "rough", "poor", "unknown"] as const).map((tier) => (
-            <span key={tier} style={{ display: "inline-flex", alignItems: "center" }}>
+            <span key={tier} className="chip static">
               <ConfidenceDot wape={tier === "good" ? 0 : tier === "rough" ? 80 : tier === "poor" ? 150 : null} />
               {t(CONFIDENCE_KEY[tier])}
             </span>
@@ -591,7 +762,10 @@ export default function Forecast() {
                       </td>
                       <td className="dim">{r.category ?? "—"}</td>
                       <td className="dim">{methodLabel(r.method)}</td>
-                      <td className="num mono dim">
+                      <td className="num mono dim"
+                          title={r.wape_full_horizon !== null
+                                ? t("fc_wape_full_horizon_tooltip", { wape: r.wape_full_horizon })
+                                : undefined}>
                         <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end" }}>
                           <ConfidenceDot wape={r.wape} />
                           {r.wape !== null ? `${r.wape}%` : "—"}
@@ -612,7 +786,6 @@ export default function Forecast() {
                       <td>
                         {r.order ? (
                           <span style={{ color: "var(--amber)", fontWeight: 600 }}>
-                            📦{" "}
                             {t("fc_order_badge", {
                               qty: fmtQty(r.order.qty),
                               month: fmtMonth(r.order.order_by, lang),

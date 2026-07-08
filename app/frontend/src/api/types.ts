@@ -9,6 +9,19 @@ export interface CompatRule {
   origin: string;
   status: "draft" | "confirmed" | "rejected";
   confirmed_by: string | null;
+  note: string | null;
+}
+
+export interface LlmDraftResult {
+  ok: boolean;
+  model: string;
+  cpu_unclassified: number;
+  mb_unclassified: number;
+  classified: number;
+  needs_review: number;
+  rules_drafted: number;
+  skipped_existing: number;
+  error: string | null;
 }
 
 export interface Adjustment {
@@ -94,7 +107,8 @@ export interface ForecastRow {
   category: string | null;
   tier: number | null;
   method: string | null;
-  wape: number | null;
+  wape: number | null;               // near-term (M+1) WAPE — drives confidence
+  wape_full_horizon: number | null;  // 6-month blended WAPE — secondary caveat
   stock: number | null;
   qty: number[];
   next12_total: number;
@@ -141,7 +155,8 @@ export interface ForecastDetail {
     min_stock_days: number | null;
   };
   method: string | null;
-  wape: number | null;
+  wape: number | null;               // near-term (M+1) WAPE — drives confidence
+  wape_full_horizon: number | null;  // 6-month blended WAPE — secondary caveat
   history: MonthQty[];
   forecast: ForecastMonth[];
   one_plan: MonthQty[];

@@ -71,7 +71,7 @@ def get_compat_rules(status: str | None = None, min_confidence: float | None = N
                           part_a_name=items.get(r.part_a_id, "?"),
                           part_b_id=r.part_b_id, part_b_name=items.get(r.part_b_id, "?"),
                           relation=r.relation, confidence=r.confidence, origin=r.origin,
-                          status=r.status, confirmed_by=r.confirmed_by) for r in rows]
+                          status=r.status, confirmed_by=r.confirmed_by, note=r.note) for r in rows]
 
 
 @app.post("/compat-rules/{rule_id}/confirm", response_model=CompatRuleOut)
@@ -84,7 +84,7 @@ def confirm_compat_rule(rule_id: int, body: ConfirmRequest, session: Session = D
     return CompatRuleOut(id=r.id, part_a_id=r.part_a_id, part_a_name=items.get(r.part_a_id, "?"),
                          part_b_id=r.part_b_id, part_b_name=items.get(r.part_b_id, "?"),
                          relation=r.relation, confidence=r.confidence, origin=r.origin,
-                         status=r.status, confirmed_by=r.confirmed_by)
+                         status=r.status, confirmed_by=r.confirmed_by, note=r.note)
 
 
 @app.post("/compat-rules/{rule_id}/reject", response_model=CompatRuleOut)
@@ -97,13 +97,22 @@ def reject_compat_rule(rule_id: int, body: RejectRequest, session: Session = Dep
     return CompatRuleOut(id=r.id, part_a_id=r.part_a_id, part_a_name=items.get(r.part_a_id, "?"),
                          part_b_id=r.part_b_id, part_b_name=items.get(r.part_b_id, "?"),
                          relation=r.relation, confidence=r.confidence, origin=r.origin,
-                         status=r.status, confirmed_by=r.confirmed_by)
+                         status=r.status, confirmed_by=r.confirmed_by, note=r.note)
 
 
 @app.post("/compat-rules/bulk-confirm")
 def bulk_confirm(author: str, threshold: float = 0.9, session: Session = Depends(db)):
     n = rules_svc.bulk_confirm_high_confidence(session, author, threshold)
     return {"confirmed": n, "threshold": threshold}
+
+
+@app.post("/compat-rules/draft-llm")
+def draft_llm_compat_rules(session: Session = Depends(db)):
+    """LLM pass over parts the spec table can't classify (new products).
+    Drafts land as origin='llm' with confidence capped below bulk-confirm —
+    each needs an individual human decision (BR-010)."""
+    from ..advisory.llm_rules import draft_llm_rules
+    return draft_llm_rules(session)
 
 
 # ------------------------------------------------------------ adjustments --

@@ -27,6 +27,26 @@ from .engine import tier2 as tier2_engine
 METHOD = "tier2_attach_rate"
 CATEGORY_METHOD = "tier2_category_average"
 MIN_HISTORY_MONTHS = 6   # below this, even a median attach rate is a guess
+RECENCY_MONTHS = 6       # FIX_PLAN M2: baseline.is_stale() only looks at
+                         # TRAILING PAST months before `start`, but 部品予測
+                         # is a forward-looking plan — Tier-2 accessory parts
+                         # have their nonzero values concentrated in FUTURE
+                         # months relative to `start`, not the trailing 6, so
+                         # is_stale wrongly flagged nearly every one of these
+                         # 626 items as stale. This bidirectional check
+                         # treats activity dated at/after `start` as current
+                         # (it's live forward-looking plan data, not history),
+                         # while still refusing an item whose last activity —
+                         # past OR future — is entirely outside this window,
+                         # which is what is_stale was protecting against in
+                         # the first place (see test_tier2_forecasting.py's
+                         # synthetic-decade-old-item regression test).
+
+
+def _has_current_activity(obs: dict[date, float], start: date,
+                          months: int = RECENCY_MONTHS) -> bool:
+    cutoff = baseline.add_months(start, -months)
+    return any((v or 0) > 0 for m, v in obs.items() if m >= cutoff)
 
 
 def _tier1_historical_series(series: dict[int, dict[date, float]],
@@ -79,12 +99,7 @@ def generate_tier2(session, run, series: dict[int, dict[date, float]],
             continue
         if len(obs) < MIN_HISTORY_MONTHS:
             continue
-        if baseline.is_stale(obs, start):
-            # genuinely no recent activity — an old attach rate would
-            # project demand for what's likely a discontinued part (the
-            # exact anti-pattern is_stale exists to prevent for the SKU
-            # engine; found 2026-07-07 while wiring this in, before it
-            # shipped a single bogus forecast)
+        if not _has_current_activity(obs, start):
             skipped_stale += 1
             continue
         rows = tier2_engine.make_tier2_forecast(obs, tier1_hist, tier1_forecast)

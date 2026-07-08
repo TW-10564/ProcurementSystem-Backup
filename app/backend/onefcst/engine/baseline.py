@@ -44,6 +44,15 @@ LEVEL_MONTHS = 6            # recent months that set the seasonal volume level
 STALE_MONTHS = 6            # no data in the last N months → skip the SKU
 HOLDOUT_MONTHS = 6          # test window for method selection + validation
 DEFAULT_METHOD = "flat3"    # used when history is too short to run a hold-out
+WINNER_MARGIN = 10.0        # relative WAPE points a single method must beat
+                            # combo by to be crowned outright (FIX_PLAN M1) —
+                            # winner-take-all on a noisy 6-point test window
+                            # overfits to that window's noise; measured
+                            # 2026-07-07, combo (equal-weight average of all
+                            # candidates) beats winner-take-all 115.7% vs
+                            # 121.5% volume-weighted WAPE. Only override
+                            # combo when a candidate demonstrably clears it
+                            # by a real margin, not hold-out noise.
 
 
 def add_months(month: date, n: int) -> date:
@@ -183,6 +192,22 @@ def wape(actual: list[float], predicted: list[float]) -> float | None:
     return 100 * sum(abs(a - p) for a, p in zip(actual, predicted)) / den
 
 
+def select_winner(wapes: dict[str, float]) -> str:
+    """Pick the hold-out winner from a {method: wape} map (FIX_PLAN M1).
+
+    Winner-take-all on a noisy 6-point test window overfits to that
+    window's noise — measured 2026-07-07, combo (equal-weight average of
+    all candidates) beats winner-take-all 115.7% vs 121.5% volume-weighted
+    WAPE. So only crown a single method over combo when it clears combo's
+    WAPE by a real margin (WINNER_MARGIN); otherwise default to combo,
+    which is the steadier choice on noisy per-SKU series."""
+    best = min(wapes, key=wapes.get)
+    combo_wape = wapes.get("combo")
+    if combo_wape is None or best == "combo" or wapes[best] < combo_wape - WINNER_MARGIN:
+        return best
+    return "combo"
+
+
 def holdout_eval(obs: dict[date, float], start_month: date,
                  test_months: int = HOLDOUT_MONTHS) -> dict | None:
     """Hide the last test_months observed months, forecast them with every
@@ -202,7 +227,7 @@ def holdout_eval(obs: dict[date, float], start_month: date,
              if (w := wape(actual, [v for _, v in rows])) is not None}
     if not wapes:
         return None
-    winner = min(wapes, key=wapes.get)
+    winner = select_winner(wapes)
     # first-month error components per method — buyers act on M+1 (lead
     # times), so near-term accuracy is reported alongside the 6-month WAPE
     m1 = {name: abs(actual[0] - rows[0][1]) for name, rows in cands.items()}

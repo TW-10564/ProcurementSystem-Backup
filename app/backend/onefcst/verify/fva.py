@@ -13,8 +13,30 @@ from __future__ import annotations
 from datetime import date
 
 from ..db import get_session
-from ..models import Adjustment, PlanValue, Actual, Item
+from ..models import Adjustment, Actual, Item, Forecast, ForecastRun
 from ..engine.fva import score_fva
+
+
+def _original_baseline(session, adj: Adjustment) -> float | None:
+    """The statistical forecast the adjustment actually overrode — NEVER the
+    current master cell, which gets overwritten with the actual once the
+    month closes (FIX_PLAN C1). Prefers old_value (captured verbatim at
+    adjustment time); falls back to the Forecast row from whichever run was
+    live when the adjustment was recorded."""
+    if adj.old_value is not None:
+        return adj.old_value
+    run_id = adj.run_id
+    if run_id is None:
+        run = (session.query(ForecastRun)
+              .filter(ForecastRun.created_at <= adj.created_at)
+              .order_by(ForecastRun.created_at.desc()).first())
+        run_id = run.id if run else None
+    if run_id is None:
+        return None
+    row = (session.query(Forecast.baseline)
+          .filter(Forecast.run_id == run_id, Forecast.item_id == adj.item_id,
+                  Forecast.month == adj.month).first())
+    return row[0] if row else None
 
 
 def scoreable_adjustments(session) -> list[dict]:
@@ -28,14 +50,11 @@ def scoreable_adjustments(session) -> list[dict]:
         actual_row = (session.query(Actual.qty)
                      .filter(Actual.item_id == adj.item_id, Actual.month == adj.month)
                      .first())
-        baseline_row = (session.query(PlanValue.value)
-                        .filter(PlanValue.item_id == adj.item_id,
-                                PlanValue.month == adj.month, PlanValue.level == "master")
-                        .first())
-        if actual_row is None or baseline_row is None:
+        baseline_value = _original_baseline(session, adj)
+        if actual_row is None or baseline_value is None:
             continue
         item = session.get(Item, adj.item_id)
-        score = score_fva([baseline_row[0]], [adj.new_value], [actual_row[0]])
+        score = score_fva([baseline_value], [adj.new_value], [actual_row[0]])
         out.append({"adjustment_id": adj.id, "item": item.canonical_name if item else "?",
                    "month": adj.month.isoformat(), "author": adj.author,
                    "reason": adj.reason, **score})

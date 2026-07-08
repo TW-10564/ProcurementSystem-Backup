@@ -1,14 +1,14 @@
 export type Lang = "ja" | "en";
 
 export const translations = {
-  brand_name: { ja: "onefcst", en: "onefcst" },
-  brand_sub: { ja: "需要予測・購買支援", en: "Forecasting & Procurement" },
+  brand_name: { ja: "調達予測ポータル", en: "Procurement Forecast Portal" },
+  brand_sub: { ja: "需要予測・購買意思決定支援", en: "Demand forecasting & buying decision support" },
 
   nav_section_overview: { ja: "概要", en: "Overview" },
   nav_dashboard: { ja: "ダッシュボード", en: "Dashboard" },
   nav_section_accuracy: { ja: "予測・精度", en: "Forecast & Accuracy" },
   nav_forecast: { ja: "需要予測", en: "Demand Forecast" },
-  nav_accuracy: { ja: "予測精度 (FVA)", en: "Accuracy (FVA)" },
+  nav_accuracy: { ja: "予測精度（FVA）", en: "Accuracy (FVA)" },
   nav_section_compat: { ja: "部材整合性", en: "Parts Compatibility" },
   nav_mismatch: { ja: "ミスマッチ検知", en: "Mismatch Detection" },
   nav_compat: { ja: "互換性ルール確認", en: "Compatibility Rules" },
@@ -18,7 +18,7 @@ export const translations = {
   nav_notifications: { ja: "通知・変更履歴", en: "Notifications & Audit Log" },
 
   common_loading: { ja: "読み込み中…", en: "Loading…" },
-  common_download_excel: { ja: "⬇ Excelでダウンロード", en: "⬇ Download Excel" },
+  common_download_excel: { ja: "Excel出力", en: "Export to Excel" },
   common_none_recorded: { ja: "記録はまだありません", en: "Nothing recorded yet" },
   common_author_label: { ja: "担当者名", en: "Author name" },
 
@@ -38,7 +38,7 @@ export const translations = {
   dash_kpi_high_mismatch_sub: { ja: "中リスク {n} 件（{month} 時点）", en: "{n} medium-risk (as of {month})" },
   dash_kpi_pending_rules: { ja: "互換性ルール 未確認", en: "Pending compatibility rules" },
   dash_kpi_pending_rules_sub: { ja: "確認済み {n} 件", en: "{n} confirmed" },
-  dash_kpi_activity: { ja: "直近の操作ログ", en: "Recent activity" },
+  dash_kpi_activity: { ja: "最近のアクティビティ", en: "Recent activity" },
   dash_kpi_activity_sub: { ja: "全操作は担当者に紐づいて記録されます", en: "Every action is logged to its author" },
   dash_backtest_title: { ja: "予測精度の検証結果（バックテスト）", en: "Accuracy validation (backtest)" },
   dash_backtest_desc: {
@@ -53,7 +53,7 @@ export const translations = {
   dash_activity_title: { ja: "最近のアクティビティ", en: "Recent activity" },
 
   // Accuracy / FVA
-  accuracy_title: { ja: "予測精度 (Forecast Value Added)", en: "Accuracy (Forecast Value Added)" },
+  accuracy_title: { ja: "予測精度（Forecast Value Added）", en: "Forecast Accuracy (FVA)" },
   accuracy_sub: {
     ja: "季節性を用いた統計的ベースラインを、2種類の単純な代替手法（毎月均等配分／前年同月をそのまま使用）と過去データで比較検証した結果です。機械学習モデルは、この検証で現行手法を上回ることが実証されない限り導入しません。",
     en: "The seasonal statistical baseline is validated against two naive alternatives (flat monthly split / repeat last year) using real history. No ML model is adopted unless it proves it beats the current method in this same test.",
@@ -63,7 +63,7 @@ export const translations = {
     ja: "計画担当者による調整が、実績と比較して予測を改善したかを測定します",
     en: "Measures whether a planner's adjustment made the forecast more accurate once the actual result is known",
   },
-  fva_download: { ja: "⬇ 調整履歴をExcelでダウンロード", en: "⬇ Download adjustment history (Excel)" },
+  fva_download: { ja: "調整履歴をExcel出力", en: "Export adjustment history" },
   fva_no_scoreable: { ja: "評価可能な調整はまだありません。", en: "No adjustments are scoreable yet." },
   fva_recorded_note: {
     ja: "（現在記録されている調整: {n}件、対象月の実績確定待ち）",
@@ -114,7 +114,7 @@ export const translations = {
   planner_th_period: { ja: "期間", en: "Period" },
   planner_th_months: { ja: "月数", en: "Months" },
   planner_th_wape: { ja: "WAPE", en: "WAPE" },
-  planner_our_row: { ja: "当システム（全社季節性モデル・10年検証）", en: "Our system (company-wide seasonal model, 10yr backtest)" },
+  planner_our_row: { ja: "当システム（全社季節性モデル・10年検証）", en: "This system (company-wide seasonal model, 10-year backtest)" },
   planner_cat_conclusion_label: { ja: "結論", en: "Conclusion" },
   planner_cat_conclusion: {
     ja: "実証済みの同水準： 当システムの10.95%は、計画担当者自身の実際の過去精度（5.4〜13.1%）の範囲内に収まっています。小規模・変動の大きいカテゴリ（24〜249%）はどちらの手法でも精度が落ちており、これは手法の優劣ではなくデータの性質による限界です。",
@@ -155,7 +155,7 @@ export const translations = {
   },
 
   // Demand forecast
-  fc_title: { ja: "需要予測（部品別・月別数量）", en: "Demand Forecast (per part, per month)" },
+  fc_title: { ja: "需要予測（部材別・月別数量）", en: "Demand Forecast (by part and month)" },
   fc_sub: {
     ja: "各部材のONE計画実績履歴から、SKUごとに複数の統計手法（季節性・トレンド・移動平均）を過去データで競わせ、最も的中した手法で今後12か月の必要数量を予測します。機械学習は使用していません。予測はあくまで参考値であり、発注の最終判断は担当者が行います。",
     en: "For each part, several simple statistical methods (seasonal, trend, moving average) compete on that SKU's own history, and the most accurate one forecasts the next 12 months of required quantity. No ML. Forecasts are advisory — ordering decisions stay with the buyer.",
@@ -168,7 +168,7 @@ export const translations = {
     ja: "予測がまだ生成されていません。「予測を再計算」を押してください。",
     en: "No forecast has been generated yet. Press \"Recalculate forecast\".",
   },
-  fc_kpi_items: { ja: "予測対象SKU", en: "SKUs forecasted" },
+  fc_kpi_items: { ja: "予測対象SKU", en: "Forecasted SKUs" },
   fc_kpi_items_sub: { ja: "直近6か月に動きのない{n}件は対象外", en: "{n} inactive SKUs excluded" },
   fc_kpi_next3: { ja: "今後3か月の必要数量（全体）", en: "Total qty needed, next 3 months" },
   fc_kpi_next3_sub: { ja: "全カテゴリ合計", en: "All categories combined" },
@@ -193,6 +193,16 @@ export const translations = {
     ja: "実績なしの部材向けに、Tier-1需要との相関から自動で導出した予測（SKU別統計モデルの対象外）",
     en: "Forecasts auto-derived from Tier-1 demand correlation for parts the SKU statistical model can't reach",
   },
+  fc_tier2_title: { ja: "Tier-2 派生予測（購買部門）", en: "Tier-2 derived forecasts (Purchasing)" },
+  fc_tier2_desc: {
+    ja: "計画部門が計画するCPU/マザーボード/GPU/ケース以外の部材。Tier-1需要との相関から自動導出",
+    en: "Everything outside planning's CPU/MB/GPU/Case scope — auto-derived from Tier-1 demand correlation",
+  },
+  fc_tier2_attach: { ja: "実績相関（attach-rate）", en: "Own-history attach-rate" },
+  fc_tier2_category: { ja: "カテゴリ平均推定", en: "Category-average estimate" },
+  fc_tier2_loo_wape: { ja: "検証WAPE（leave-one-out）", en: "Validated WAPE (leave-one-out)" },
+  fc_tier2_view_all: { ja: "Tier-2 全件を一覧で表示", en: "View all Tier-2 items" },
+  fc_tier2_top_title: { ja: "数量上位のTier-2部材", en: "Top Tier-2 parts by volume" },
   fc_cat_title: { ja: "カテゴリ別の必要数量", en: "Required quantity by category" },
   fc_cat_desc: { ja: "行をクリックすると下の一覧を絞り込みます", en: "Click a row to filter the list below" },
   fc_th_category: { ja: "カテゴリ", en: "Category" },
@@ -206,18 +216,22 @@ export const translations = {
   },
   fc_search_placeholder: { ja: "部材名で検索（例: RTX5070）", en: "Search by part name (e.g. RTX5070)" },
   fc_filter_all: { ja: "すべてのカテゴリ", en: "All categories" },
-  fc_th_item: { ja: "部材（綽名）", en: "Part (nickname)" },
+  fc_th_item: { ja: "部材（綽名）", en: "Part (alias)" },
   fc_th_method: { ja: "手法", en: "Method" },
-  fc_th_wape: { ja: "検証WAPE", en: "Hold-out WAPE" },
+  fc_th_wape: { ja: "検証WAPE（M+1）", en: "Hold-out WAPE (M+1)" },
+  fc_wape_full_horizon_tooltip: {
+    ja: "6ヶ月WAPE（全期間）：{wape}%",
+    en: "6-month (full horizon) WAPE: {wape}%",
+  },
   fc_confidence_legend: {
     ja: "信頼度（検証WAPEに基づく）：",
     en: "Confidence (based on hold-out WAPE):",
   },
-  fc_confidence_good: { ja: "良好 (≤60%)", en: "Good (≤60%)" },
-  fc_confidence_rough: { ja: "参考程度 (60-100%)", en: "Rough (60-100%)" },
-  fc_confidence_poor: { ja: "信頼不可 (>100%)", en: "Unreliable (>100%)" },
+  fc_confidence_good: { ja: "良好（60%以下）", en: "Good (≤60%)" },
+  fc_confidence_rough: { ja: "参考程度（60〜100%）", en: "Indicative (60–100%)" },
+  fc_confidence_poor: { ja: "信頼不可（100%超）", en: "Unreliable (>100%)" },
   fc_confidence_unknown: { ja: "検証不可（履歴不足）", en: "Unvalidated (short history)" },
-  fc_adjusted_badge: { ja: "✍️ 調整あり", en: "✍️ Adjusted" },
+  fc_adjusted_badge: { ja: "調整済", en: "Adjusted" },
   fc_adjusted_tooltip: {
     ja: "{month}: 統計予測 {baseline} → 手動調整 {adjusted}（{author}）\n理由: {reason}",
     en: "{month}: statistical forecast {baseline} → manually adjusted {adjusted} ({author})\nReason: {reason}",
@@ -249,8 +263,12 @@ export const translations = {
   fc_legend_forecast: { ja: "システム予測", en: "System forecast" },
   fc_legend_plan: { ja: "ONE計画（担当者計画値）", en: "ONE plan (planner's figures)" },
   fc_detail_wape_note: {
-    ja: "このSKUの検証WAPE: {wape}%（直近6か月を隠して予測した際の誤差。参考値として幅を持って見てください）",
-    en: "This SKU's hold-out WAPE: {wape}% (error when the last 6 months were hidden and forecast — treat the numbers as a range, not a point)",
+    ja: "このSKUの近月WAPE（M+1）: {wape}%（翌月のみを隠して予測した際の誤差 — 実際の発注判断に近い指標）",
+    en: "This SKU's near-term WAPE (M+1): {wape}% (error forecasting just next month — closest to what a buyer actually acts on)",
+  },
+  fc_detail_wape_full_horizon_note: {
+    ja: "参考: 6ヶ月WAPE（全期間）: {wape}%",
+    en: "For reference: 6-month (full horizon) WAPE: {wape}%",
   },
   fc_detail_no_wape: {
     ja: "履歴が短いため検証精度は未算出です（{method}で予測）",
@@ -324,7 +342,7 @@ export const translations = {
   },
   compat_author_placeholder: { ja: "例）purchasing.tanaka", en: "e.g. purchasing.tanaka" },
   compat_status_label: { ja: "状態", en: "Status" },
-  compat_status_draft: { ja: "未承認（draft）", en: "Unconfirmed (draft)" },
+  compat_status_draft: { ja: "未承認（ドラフト）", en: "Draft (unconfirmed)" },
   compat_status_confirmed: { ja: "承認済み", en: "Confirmed" },
   compat_status_rejected: { ja: "却下済み", en: "Rejected" },
   compat_confidence_label: { ja: "信頼度しきい値", en: "Confidence threshold" },

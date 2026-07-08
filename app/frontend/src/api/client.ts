@@ -7,6 +7,7 @@ import type {
   ForecastList,
   ForecastRunInfo,
   ForecastSummary,
+  LlmDraftResult,
   MismatchReport,
   Notification,
   PlannerAccuracy,
@@ -45,6 +46,11 @@ export const api = {
     http
       .post("/compat-rules/bulk-confirm", null, { params: { author, threshold } })
       .then((r) => r.data as { confirmed: number; threshold: number }),
+
+  draftLlmRules: () =>
+    http
+      .post<LlmDraftResult>("/compat-rules/draft-llm", null, { timeout: 300_000 })
+      .then((r) => r.data),
 
   adjustments: (item_id?: number) =>
     http

@@ -24,9 +24,8 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from sqlalchemy import func
-
-from .models import AccuracyScore, Adjustment, Forecast, ForecastRun, Item, PlanValue, StockState
+from .models import (AccuracyScore, Adjustment, Forecast, ForecastRun, Item,
+                    PlanValue, Snapshot, StockState)
 from .engine.stock_projection import suggest_order
 from .engine.weekly import disaggregate_forecast
 
@@ -66,19 +65,58 @@ def _forecast_rows(session, run_id: int) -> dict[int, list]:
     return out
 
 
+def _adjustment_factor(adj: Adjustment) -> float | None:
+    """Multiplicative factor a global/category adjustment represents, used to
+    scale every OTHER item in scope (the item it was actually recorded
+    against still gets the literal new_value — see _apply_adjustments).
+    Prefers the explicit `factor` column; falls back to deriving one from
+    old_value/new_value (what the Adjustments form actually collects today).
+    Returns None when neither is available — not enough information to
+    safely expand beyond the single recorded item."""
+    if adj.factor is not None:
+        return adj.factor
+    if adj.old_value not in (None, 0):
+        return adj.new_value / adj.old_value
+    return None
+
+
 def _latest_adjustments(session) -> dict[tuple[int, date], Adjustment]:
-    """Most recent sku-scoped adjustment per (item_id, month), across ALL
-    runs ever recorded — NOT filtered to the current run_id, so a decision
-    from an earlier week's meeting keeps applying after regeneration. If a
-    later meeting records a new adjustment for the same (item, month), the
-    later one (by created_at) wins — this week's decision supersedes last
-    week's for the same target, same as a person overwriting a sticky note."""
+    """Most recent adjustment per (item_id, month), across ALL runs ever
+    recorded — NOT filtered to the current run_id, so a decision from an
+    earlier week's meeting keeps applying after regeneration. If a later
+    meeting records a new adjustment for the same (item, month), the later
+    one (by created_at) wins — this week's decision supersedes last week's
+    for the same target, same as a person overwriting a sticky note.
+
+    scope="sku" affects only its own item_id, as before. scope="global"/
+    "category" (FIX_PLAN C2 — previously accepted and stored but NEVER
+    read by any downstream path) are expanded here to every item they
+    should affect: every item for "global", every item sharing the
+    recorded item's category for "category". _apply_adjustments applies
+    the expanded ones as a scaling factor rather than pasting one item's
+    absolute value onto every other item."""
     rows = (session.query(Adjustment)
-            .filter(Adjustment.item_id.isnot(None), Adjustment.scope == "sku")
+            .filter(Adjustment.item_id.isnot(None))
             .order_by(Adjustment.created_at.asc()).all())
+    if not rows:
+        return {}
+    items = {i.id: i for i in session.query(Item).all()}
     latest: dict[tuple[int, date], Adjustment] = {}
     for a in rows:
-        latest[(a.item_id, _as_date(a.month))] = a   # later created_at overwrites earlier
+        month = _as_date(a.month)
+        if a.scope == "global" and _adjustment_factor(a) is not None:
+            targets = list(items.keys())
+        elif a.scope == "category" and _adjustment_factor(a) is not None:
+            anchor = items.get(a.item_id)
+            cat = anchor.category if anchor else None
+            targets = [iid for iid, it in items.items() if it.category == cat]
+        else:
+            # scope="sku", or global/category without enough info (no
+            # factor and no old_value) to safely expand — still apply to
+            # the recorded item rather than silently dropping it.
+            targets = [a.item_id]
+        for item_id in targets:
+            latest[(item_id, month)] = a   # later created_at overwrites earlier
     return latest
 
 
@@ -88,16 +126,28 @@ def _apply_adjustments(item_id: int, months: list[date], baseline_qtys: list[flo
     """Overlay any matching adjustments onto a baseline series. Returns the
     final (possibly-overridden) quantities AND a {month_index: detail} map
     so callers can show "adjusted from N — reason, author" rather than
-    silently swapping the number."""
+    silently swapping the number.
+
+    The item the adjustment was literally recorded against (scope="sku", or
+    the anchor item of a "global"/"category" adjustment) gets the exact
+    new_value typed in. Every OTHER item swept in by a "global"/"category"
+    expansion gets its own baseline scaled by the same factor instead —
+    pasting one item's absolute value onto a different item's forecast
+    would be meaningless."""
     final = list(baseline_qtys)
     detail: dict[int, dict] = {}
     for i, m in enumerate(months):
         adj = adjustments.get((item_id, m))
         if adj is not None:
-            detail[i] = {"baseline": baseline_qtys[i], "adjusted": adj.new_value,
+            if getattr(adj, "scope", "sku") == "sku" or adj.item_id == item_id:
+                new_val = adj.new_value
+            else:
+                factor = _adjustment_factor(adj)
+                new_val = baseline_qtys[i] * factor if factor is not None else adj.new_value
+            detail[i] = {"baseline": baseline_qtys[i], "adjusted": new_val,
                         "reason": adj.reason, "author": adj.author,
                         "created_at": adj.created_at.isoformat() if adj.created_at else None}
-            final[i] = adj.new_value
+            final[i] = new_val
     return final, detail
 
 
@@ -161,8 +211,13 @@ def list_forecasts(session, q: str = "", category: str | None = None,
     by_item = _forecast_rows(session, run.id)
     stocks = _stock_by_item(session)
     adjustments = _latest_adjustments(session)
-    wapes = {a.item_id: a.wape for a in session.query(AccuracyScore)
-             .filter(AccuracyScore.run_id == run.id).all()}
+    # FIX_PLAN M1: wape_m1 (near-term, M+1-only) is the primary confidence
+    # signal shown/colored in the UI — it's the number a buyer actually acts
+    # on given lead times. The 6-month blended WAPE is kept as a secondary
+    # "full horizon" caveat (wape_full_horizon) rather than driving the
+    # confidence dot, since it's dominated by noisier far-out months.
+    acc_scores = {a.item_id: a for a in session.query(AccuracyScore)
+                 .filter(AccuracyScore.run_id == run.id).all()}
 
     item_q = session.query(Item).filter(Item.id.in_(by_item.keys()))
     if q:
@@ -189,11 +244,16 @@ def list_forecasts(session, q: str = "", category: str | None = None,
                                               adjustments)
         stock = stocks.get(item.id)
         sugg = _suggestion(item, stock, qtys)
+        acc = acc_scores.get(item.id)
+        wape_m1 = acc.wape_m1 if acc and acc.wape_m1 is not None else None
+        wape_full = acc.wape if acc and acc.wape is not None else None
         rows.append({
             "item_id": item.id, "name": item.canonical_name,
             "category": item.category, "tier": item.tier,
             "method": frows[0].method,
-            "wape": round(wapes[item.id], 1) if item.id in wapes else None,
+            "wape": round(wape_m1 if wape_m1 is not None else wape_full, 1)
+                    if (wape_m1 is not None or wape_full is not None) else None,
+            "wape_full_horizon": round(wape_full, 1) if wape_full is not None else None,
             "stock": (stock.sap_qty if stock and stock.sap_qty is not None
                       else stock.one_balance if stock else None),
             "qty": qtys, "next12_total": round(sum(qtys[:12])),
@@ -229,24 +289,41 @@ def item_detail(session, item_id: int) -> dict | None:
         method = frows[0].method if frows else None
 
     start = _as_date(forecast[0]["month"]) if forecast else date.today().replace(day=1)
-    plan_rows = (session.query(PlanValue.month, func.avg(PlanValue.value))
-                 .filter(PlanValue.item_id == item_id, PlanValue.level == "master",
-                         PlanValue.value.isnot(None))
-                 .group_by(PlanValue.month).order_by(PlanValue.month).all())
-    history = [{"month": _as_date(m).isoformat(), "qty": round(v, 1)}
-               for m, v in plan_rows if _as_date(m) < start][-24:]
-    one_plan = [{"month": _as_date(m).isoformat(), "qty": round(v, 1)}
-                for m, v in plan_rows if _as_date(m) >= start][:len(forecast) or 12]
+    # FIX_PLAN C4: same latest-snapshot-wins fix as forecasting._series_by_item
+    # — a re-ingested (corrected) month must not be averaged with the stale
+    # value it replaced.
+    plan_rows_raw = (session.query(PlanValue.month, PlanValue.value,
+                                   PlanValue.snapshot_id, Snapshot.file_mtime)
+                     .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
+                     .filter(PlanValue.item_id == item_id, PlanValue.level == "master",
+                             PlanValue.value.isnot(None))
+                     .order_by(PlanValue.month, Snapshot.file_mtime.asc(),
+                              PlanValue.snapshot_id.asc())
+                     .all())
+    latest_by_month: dict[date, float] = {}
+    for m, v, _sid, _mtime in plan_rows_raw:
+        latest_by_month[_as_date(m)] = v          # later (latest) overwrites
+    plan_rows = sorted(latest_by_month.items())
+    history = [{"month": m.isoformat(), "qty": round(v, 1)}
+               for m, v in plan_rows if m < start][-24:]
+    one_plan = [{"month": m.isoformat(), "qty": round(v, 1)}
+                for m, v in plan_rows if m >= start][:len(forecast) or 12]
 
     stock = (session.query(StockState).filter(StockState.item_id == item_id)
              .order_by(StockState.snapshot_date.desc()).first())
     sugg = _suggestion(item, stock, [f["qty"] or 0.0 for f in forecast])
     wape = None
+    wape_full_horizon = None
     if run:
         acc = (session.query(AccuracyScore)
                .filter(AccuracyScore.run_id == run.id,
                        AccuracyScore.item_id == item_id).first())
-        wape = round(acc.wape, 1) if acc and acc.wape is not None else None
+        # FIX_PLAN M1: near-term (M+1) WAPE is the primary confidence signal;
+        # 6-month blended WAPE follows as a secondary "full horizon" caveat.
+        if acc:
+            wape_full_horizon = round(acc.wape, 1) if acc.wape is not None else None
+            wape = (round(acc.wape_m1, 1) if acc.wape_m1 is not None
+                    else wape_full_horizon)
 
     near_term = [(_as_date(f["month"]), f["qty"] or 0.0)
                 for f in forecast[:WEEKLY_HORIZON_MONTHS]]
@@ -257,7 +334,7 @@ def item_detail(session, item_id: int) -> dict | None:
                      "lifecycle": item.lifecycle, "moq": item.moq,
                      "lead_time_days": item.lead_time_days,
                      "min_stock_days": item.min_stock_days},
-            "method": method, "wape": wape,
+            "method": method, "wape": wape, "wape_full_horizon": wape_full_horizon,
             "history": history, "forecast": forecast, "one_plan": one_plan,
             "weekly": weekly,
             "stock": ({"one_balance": stock.one_balance, "sap_qty": stock.sap_qty,
