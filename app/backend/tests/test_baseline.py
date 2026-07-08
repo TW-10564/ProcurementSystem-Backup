@@ -211,6 +211,176 @@ def test_short_history_falls_back_to_default():
     assert [v for _, v in rows] == [12.0] * 6                    # (10+12+14)/3
 
 
+# ------------------------------------------------------ known-plan override
+def test_apply_known_plan_overrides_only_months_present_in_obs():
+    rows = [(date(2026, 7, 1), 100.0), (date(2026, 8, 1), 100.0),
+           (date(2026, 9, 1), 100.0)]
+    obs = {date(2026, 8, 1): 55.0}                # planner already decided Aug
+    out, n = baseline.apply_known_plan(rows, obs)
+    assert out == [(date(2026, 7, 1), 100.0), (date(2026, 8, 1), 55.0),
+                   (date(2026, 9, 1), 100.0)]
+    assert n == 1
+
+
+def test_apply_known_plan_overrides_with_a_real_zero():
+    """A recorded zero (discontinued/paused that month) is a real data
+    point, not 'no data' — must still override, not be treated as absent."""
+    rows = [(date(2026, 7, 1), 40.0)]
+    obs = {date(2026, 7, 1): 0.0}
+    out, n = baseline.apply_known_plan(rows, obs)
+    assert out == [(date(2026, 7, 1), 0.0)]
+    assert n == 1
+
+
+def test_apply_known_plan_is_a_noop_when_month_not_in_obs():
+    rows = [(date(2026, 7, 1), 40.0)]
+    out, n = baseline.apply_known_plan(rows, {})
+    assert out == rows
+    assert n == 0
+
+
+def test_apply_known_plan_rejects_the_documented_source_file_corruption():
+    """Direct regression for a real bug this fix's first version shipped:
+    engine/tier2.py already documents a known 部品予測 chain-formula
+    corruption exploding one future month's value into the millions for an
+    affected SKU. sanitize_series guards the tier1 aggregate against it,
+    but apply_known_plan reads the SAME plan_value data through a totally
+    different path and, in its first version, trusted ANY future obs value
+    blindly — reopening that exact corruption for individual item
+    forecasts. A value ludicrously larger than the item's own recent
+    trailing level must be rejected, not treated as a real decided plan."""
+    rows = [(date(2026, 7, 1), 300.0)]
+    obs = {date(2026, 1, 1): 200.0, date(2026, 2, 1): 210.0, date(2026, 3, 1): 190.0,
+          date(2026, 7, 1): 66_105.9}              # the corrupted "known" value
+    out, n = baseline.apply_known_plan(rows, obs)
+    assert out == [(date(2026, 7, 1), 300.0)]       # statistical guess kept, not corruption
+    assert n == 0
+
+
+def test_apply_known_plan_accepts_a_large_but_plausible_known_value():
+    """The corruption guard must not reject a genuine, merely-large ramp —
+    only values wildly (15x+) beyond the recent trailing level."""
+    rows = [(date(2026, 7, 1), 300.0)]
+    obs = {date(2026, 1, 1): 200.0, date(2026, 2, 1): 210.0, date(2026, 3, 1): 190.0,
+          date(2026, 7, 1): 800.0}                  # a real ~4x ramp, not corruption
+    out, n = baseline.apply_known_plan(rows, obs)
+    assert out == [(date(2026, 7, 1), 800.0)]
+    assert n == 1
+
+
+def test_apply_known_plan_recency_check_is_chronological_not_dict_order():
+    """Direct regression for a real bug found 2026-07-08: obs is a
+    per-month merge of two sources built via dict.update(), so its
+    iteration order is NOT chronological — old, unrelated-era months can
+    land at the end of iteration order. A naive `list[-12:]` on obs.items()
+    would grab those stray ancient (near-zero) months instead of the real
+    recent window, making the corruption guard reject a perfectly
+    legitimate known value as a false-positive outlier."""
+    rows = [(date(2026, 7, 1), 3000.0)]
+    obs = {}
+    # recent, real, healthy history — inserted FIRST in iteration order
+    for i, v in enumerate([2000.0, 2200.0, 1900.0, 2500.0, 2100.0, 2300.0]):
+        obs[date(2026, 1 + i, 1)] = v
+    # ancient, unrelated near-zero months — inserted LAST, as a real
+    # per-month merge would when master has 2017-era history one_row lacks
+    for i, v in enumerate([5.0, 8.0, 3.0, 6.0, 4.0, 7.0]):
+        obs[date(2017, 1 + i, 1)] = v
+    obs[date(2026, 7, 1)] = 3640.0            # a real, plausible near-term known value
+
+    out, n = baseline.apply_known_plan(rows, obs)
+    assert out == [(date(2026, 7, 1), 3640.0)]   # accepted — not a false-positive reject
+    assert n == 1
+
+
+def test_make_forecast_uses_known_plan_for_an_already_committed_month():
+    """Direct reproduction of the 2026-07-08 cross-check finding: history is
+    flat, but the business already decided a big drop for the very next
+    month — a purely statistical (flat) projection can't see that, the
+    already-known value must win."""
+    shape = [100.0] * 24
+    obs = series(date(2024, 7, 1), shape)
+    obs[date(2026, 7, 1)] = 20.0                  # already-decided near-term plan
+    rows, method = baseline.make_forecast(obs, START, horizon=3)
+    assert rows[0] == (date(2026, 7, 1), 20.0)     # known plan wins
+    assert method.endswith("+known_plan") or method == "known_plan"
+    # months beyond the known plan still come from the statistical method
+    assert rows[1][1] == pytest.approx(100.0)
+    assert rows[2][1] == pytest.approx(100.0)
+
+
+def test_make_forecast_method_is_unchanged_when_nothing_is_overridden():
+    shape = [100.0] * 24
+    obs = series(date(2024, 7, 1), shape)          # no future months in obs at all
+    rows, method = baseline.make_forecast(obs, START, horizon=3)
+    assert "known_plan" not in method
+
+
+# ------------------------------------------------ discontinuation signal ---
+def test_is_likely_discontinuing_true_after_real_history_and_sustained_zero():
+    """Direct reproduction of the 2026-07-08 finding: an established item
+    (real prior demand) whose own known plan runs to zero for 2+
+    consecutive months right up to where the known window ends."""
+    rows = [(date(2026, 7, 1), 0.0), (date(2026, 8, 1), 0.0), (date(2026, 9, 1), 500.0)]
+    obs = {date(2026, 1, 1): 800.0, date(2026, 7, 1): 0.0, date(2026, 8, 1): 0.0}
+    assert baseline._is_likely_discontinuing(rows, obs) is True
+
+
+def test_is_likely_discontinuing_false_with_no_prior_history():
+    """An item that's simply always been zero/unsold isn't 'discontinuing'
+    — there's no established volume to be winding down from."""
+    rows = [(date(2026, 7, 1), 0.0), (date(2026, 8, 1), 0.0)]
+    obs = {date(2026, 7, 1): 0.0, date(2026, 8, 1): 0.0}
+    assert baseline._is_likely_discontinuing(rows, obs) is False
+
+
+def test_is_likely_discontinuing_false_when_zero_run_too_short():
+    rows = [(date(2026, 7, 1), 0.0), (date(2026, 8, 1), 500.0)]
+    obs = {date(2026, 1, 1): 800.0, date(2026, 7, 1): 0.0}   # only 1 known month, then gap
+    assert baseline._is_likely_discontinuing(rows, obs) is False
+
+
+def test_is_likely_discontinuing_false_when_known_zero_run_is_interrupted():
+    """A zero month followed by a real resumption doesn't count — only a
+    run immediately up to the edge of the known window matters."""
+    rows = [(date(2026, 7, 1), 0.0), (date(2026, 8, 1), 0.0), (date(2026, 9, 1), 0.0)]
+    obs = {date(2026, 1, 1): 800.0, date(2026, 7, 1): 0.0,
+          date(2026, 8, 1): 400.0,   # resumes — resets the run
+          date(2026, 9, 1): 0.0}     # only 1 in a row at the edge
+    assert baseline._is_likely_discontinuing(rows, obs) is False
+
+
+def test_apply_discontinuation_signal_carries_zero_into_the_unknown_tail():
+    rows = [(date(2026, 7, 1), 0.0), (date(2026, 8, 1), 0.0), (date(2026, 9, 1), 6121.0)]
+    obs = {date(2026, 1, 1): 800.0, date(2026, 7, 1): 0.0, date(2026, 8, 1): 0.0}
+    out, triggered = baseline.apply_discontinuation_signal(rows, obs)
+    assert triggered is True
+    assert out == [(date(2026, 7, 1), 0.0), (date(2026, 8, 1), 0.0), (date(2026, 9, 1), 0.0)]
+
+
+def test_apply_discontinuation_signal_is_a_noop_when_not_triggered():
+    rows = [(date(2026, 7, 1), 500.0)]
+    obs = {}
+    out, triggered = baseline.apply_discontinuation_signal(rows, obs)
+    assert triggered is False
+    assert out == rows
+
+
+def test_make_forecast_stops_resurrecting_demand_after_a_confirmed_windown():
+    """End-to-end reproduction: LD5-16G48 had 54 months of real ~10,000-
+    unit history, then its own committed plan confirmed zero for 4
+    straight months — but the statistical tail used to jump back to the
+    old average the moment the known window ran out. It must now stay at
+    zero instead."""
+    shape = [10000.0] * 30
+    obs = series(date(2024, 1, 1), shape)
+    for m in (date(2026, 7, 1), date(2026, 8, 1), date(2026, 9, 1), date(2026, 10, 1)):
+        obs[m] = 0.0                                   # confirmed wind-down, 4 known months
+    rows, method = baseline.make_forecast(obs, START, horizon=6)
+    quantities = [v for _, v in rows]
+    assert quantities == [0.0] * 6                      # stays at zero, doesn't resurrect
+    assert method.endswith("+discontinuing")
+
+
 # ------------------------------------------------- order suggestion math ---
 def test_suggest_order_breach_timing_and_moq_rounding():
     # balance 100, demand 60/mo → month0: 40, month1: −20.

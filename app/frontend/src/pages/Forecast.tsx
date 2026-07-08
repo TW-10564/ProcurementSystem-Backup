@@ -6,6 +6,7 @@ import type {
   ForecastDetail,
   ForecastList,
   ForecastSummary,
+  OrderSuggestions,
 } from "../api/types";
 import type { TranslationKey } from "../i18n/translations";
 
@@ -19,6 +20,37 @@ const METHOD_KEY: Record<string, TranslationKey> = {
   tier2_attach_rate: "fc_method_tier2_attach_rate",
   tier2_category_average: "fc_method_tier2_category_average",
 };
+
+// Forecast.method is a base method optionally suffixed with "+known_plan"
+// (a real, already-committed source number overrode the statistical guess
+// for at least one month — see engine/baseline.apply_known_plan) and/or
+// "+discontinuing" (a sustained run of confirmed-zero known months got
+// carried into the unguessed tail instead of reverting to the old average
+// — see engine/baseline.apply_discontinuation_signal). Parsed once here so
+// every place a method is shown can render the base label plus badges
+// instead of an unreadable raw compound string.
+function parseMethod(method: string | null): {
+  base: string | null;
+  knownPlan: boolean;
+  discontinuing: boolean;
+} {
+  if (!method) return { base: null, knownPlan: false, discontinuing: false };
+  let base = method;
+  let discontinuing = false;
+  let knownPlan = false;
+  if (base.endsWith("+discontinuing")) {
+    discontinuing = true;
+    base = base.slice(0, -"+discontinuing".length);
+  }
+  if (base.endsWith("+known_plan")) {
+    knownPlan = true;
+    base = base.slice(0, -"+known_plan".length);
+  } else if (base === "known_plan" || base === "tier2_known_plan") {
+    knownPlan = true;
+    base = null; // every month came from the real plan — no statistical method underneath
+  }
+  return { base, knownPlan, discontinuing };
+}
 
 // Confidence tiers by hold-out WAPE — thresholds chosen from this session's
 // own distribution analysis (184 scored SKUs: 6 at <=30%, 33 at 30-60%,
@@ -62,6 +94,20 @@ function ConfidenceDot({ wape }: { wape: number | null }) {
         flexShrink: 0,
       }}
     />
+  );
+}
+
+function DiscontinuingBadge({ label }: { label: string }) {
+  return (
+    <span
+      style={{
+        marginLeft: 6, fontSize: "0.68rem", fontWeight: 700, color: "var(--red)",
+        whiteSpace: "nowrap",
+      }}
+      title={label}
+    >
+      ⚠ {label}
+    </span>
   );
 }
 
@@ -172,7 +218,11 @@ export default function Forecast() {
   const [running, setRunning] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [orders, setOrders] = useState<OrderSuggestions | null>(null);
+  const [showOrders, setShowOrders] = useState(false);
+  const [orderSearch, setOrderSearch] = useState("");
   const listRef = useRef<HTMLDivElement | null>(null);
+  const ordersRef = useRef<HTMLDivElement | null>(null);
 
   const loadSummary = () =>
     api.forecastSummary().then(setSummary).catch((e) => setError(String(e.message ?? e)));
@@ -180,10 +230,26 @@ export default function Forecast() {
   const loadTier2Preview = () =>
     api.forecasts({ method: "tier2", limit: 10 }).then(setTier2Preview).catch(() => {});
 
+  const loadOrders = () =>
+    api.orderSuggestions().then(setOrders).catch((e) => setError(String(e.message ?? e)));
+
   useEffect(() => {
     loadSummary();
     loadTier2Preview();
   }, []);
+
+  // Lazy-load: the order-suggestions detail is only fetched the first time
+  // the KPI card is opened, not on every page load.
+  const toggleOrders = () => {
+    const next = !showOrders;
+    setShowOrders(next);
+    if (next) {
+      if (!orders) loadOrders();
+      requestAnimationFrame(() =>
+        ordersRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
+    }
+  };
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -204,6 +270,7 @@ export default function Forecast() {
       setFlash(t("fc_run_done", { id: r.run_id }));
       await loadSummary();
       await loadTier2Preview();
+      if (orders) await loadOrders();
       setList(await api.forecasts({ q: q || undefined, category: category ?? undefined,
                                   method: methodFilter ?? undefined, limit: 80 }));
     } catch (e: unknown) {
@@ -250,8 +317,11 @@ export default function Forecast() {
   );
   const monthCols = list?.months.slice(0, 6) ?? [];
 
-  const methodLabel = (m: string | null) =>
-    m && METHOD_KEY[m] ? t(METHOD_KEY[m]) : m ?? "—";
+  const methodLabel = (m: string | null) => {
+    const { base } = parseMethod(m);
+    if (base === null) return t("fc_method_known_plan");
+    return METHOD_KEY[base] ? t(METHOD_KEY[base]) : base;
+  };
 
   const viewAllTier2 = () => {
     setCategory(null);
@@ -324,9 +394,21 @@ export default function Forecast() {
         <div className="kpi">
           <div className="lab">{t("fc_kpi_next3")}</div>
           <div className="val">{summary ? next3All.toLocaleString() : "—"}</div>
-          <div className="sub">{t("fc_kpi_next3_sub")}</div>
+          <div className="sub">
+            {summary?.excluded_no_stock_tracking && summary.excluded_no_stock_tracking.items > 0
+              ? t("fc_kpi_next3_excluded_sub", {
+                  n: summary.excluded_no_stock_tracking.items,
+                  vol: summary.excluded_no_stock_tracking.next3_total.toLocaleString(),
+                })
+              : t("fc_kpi_next3_sub")}
+          </div>
         </div>
-        <div className="kpi accent-amber">
+        <div
+          className="kpi accent-amber"
+          onClick={toggleOrders}
+          style={{ cursor: "pointer", outline: showOrders ? "2px solid var(--amber)" : undefined }}
+          title={t("fc_kpi_orders_sub")}
+        >
           <div className="lab">{t("fc_kpi_orders")}</div>
           <div className="val" style={{ color: "var(--amber)" }}>
             {summary?.orders_needed ?? "—"}
@@ -369,6 +451,159 @@ export default function Forecast() {
           </div>
         </div>
       </div>
+
+      {/* ── Order suggestions detail — opens when the KPI above is clicked ── */}
+      {showOrders && (
+        <div className="card stripe-card brand" ref={ordersRef} style={{ marginTop: 18 }}>
+          <div className="hd">
+            <div>
+              <h3>{t("fc_orders_panel_title")}</h3>
+              <div className="desc">{t("fc_orders_panel_desc")}</div>
+            </div>
+            <button className="btn" onClick={() => setShowOrders(false)}>
+              {t("fc_orders_close")}
+            </button>
+          </div>
+          {!orders ? (
+            <div className="empty">{t("common_loading")}</div>
+          ) : (
+            <>
+              <div
+                style={{
+                  display: "flex", gap: 32, flexWrap: "wrap", alignItems: "center",
+                  padding: "2px 24px 14px",
+                }}
+              >
+                <div className="statline">
+                  <span className="n">{orders.total.toLocaleString()}</span>
+                  <span className="c">{t("fc_orders_stat_items")}</span>
+                </div>
+                <div className="statline">
+                  <span className="n">{orders.total_qty.toLocaleString()}</span>
+                  <span className="c">{t("fc_orders_stat_qty")}</span>
+                </div>
+                <div className="statline">
+                  <span className="n" style={{ color: orders.negative_stock_count > 0 ? "var(--red)" : undefined }}>
+                    {orders.negative_stock_count.toLocaleString()}
+                  </span>
+                  <span className="c">{t("fc_orders_stat_negative")}</span>
+                </div>
+                <div className="statline">
+                  <span className="n" style={{ color: "var(--amber)" }}>
+                    {(orders.by_month.find((m) => m.month === orders.run?.start_month)?.items ?? 0).toLocaleString()}
+                  </span>
+                  <span className="c">{t("fc_orders_stat_this_month")}</span>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, padding: "0 24px 16px" }}>
+                <div>
+                  <div className="eyebrow">{t("fc_orders_by_category_title")}</div>
+                  <div className="tablewrap" style={{ maxHeight: 200 }}>
+                    <table>
+                      <tbody>
+                        {orders.by_category.map((c) => (
+                          <tr key={c.category}>
+                            <td>{c.category}</td>
+                            <td className="num mono dim">{c.items}</td>
+                            <td className="num mono" style={{ fontWeight: 600 }}>
+                              {c.qty.toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div>
+                  <div className="eyebrow">{t("fc_orders_by_month_title")}</div>
+                  <div className="tablewrap" style={{ maxHeight: 200 }}>
+                    <table>
+                      <tbody>
+                        {orders.by_month.map((m) => (
+                          <tr key={m.month}>
+                            <td className="mono">{fmtMonth(m.month, lang)}</td>
+                            <td className="num mono" style={{ fontWeight: 600 }}>
+                              {m.items}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div className="toolbar">
+                <input
+                  value={orderSearch}
+                  onChange={(e) => setOrderSearch(e.target.value)}
+                  placeholder={t("fc_orders_search_placeholder")}
+                  style={{ minWidth: 260 }}
+                />
+              </div>
+              {(() => {
+                const filtered = orderSearch
+                  ? orders.rows.filter((r) =>
+                      r.name.toLowerCase().includes(orderSearch.toLowerCase()),
+                    )
+                  : orders.rows;
+                return (
+                  <>
+                    <div className="tablewrap" style={{ maxHeight: 460 }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>{t("fc_orders_th_item")}</th>
+                            <th>{t("fc_orders_th_category")}</th>
+                            <th className="num">{t("fc_orders_th_stock")}</th>
+                            <th className="num">{t("fc_orders_th_safety")}</th>
+                            <th className="num">{t("fc_orders_th_qty")}</th>
+                            <th>{t("fc_orders_th_order_by")}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filtered.map((r) => {
+                            const negative = r.stock !== null && r.stock < 0;
+                            const { discontinuing } = parseMethod(r.method);
+                            return (
+                              <tr key={r.item_id} onClick={() => openDetail(r.item_id)} style={{ cursor: "pointer" }}>
+                                <td style={{ fontWeight: 600 }}>
+                                  {r.name}
+                                  {discontinuing && <DiscontinuingBadge label={t("fc_discontinuing_badge")} />}
+                                </td>
+                                <td className="dim">{r.category ?? "—"}</td>
+                                <td className="num mono" style={{ color: negative ? "var(--red)" : undefined }}>
+                                  {fmtQty(r.stock)}
+                                  {negative && (
+                                    <span
+                                      style={{ marginLeft: 6, fontSize: "0.68rem", fontWeight: 700, color: "var(--red)" }}
+                                    >
+                                      {t("fc_orders_negative_badge")}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="num mono dim">{fmtQty(r.safety_stock)}</td>
+                                <td className="num mono" style={{ fontWeight: 700, color: "var(--amber)" }}>
+                                  {fmtQty(r.order_qty)}
+                                </td>
+                                <td className="mono">{fmtMonth(r.order_by, lang)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="dim" style={{ padding: "10px 24px", fontSize: "0.8rem" }}>
+                      {t("fc_orders_showing", { shown: filtered.length, total: orders.total })}
+                    </div>
+                  </>
+                );
+              })()}
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── Category breakdown + Tier-2 side by side when both exist ── */}
       <div className={tier2 && tier2Total > 0 ? "grid-13" : undefined}>
@@ -501,7 +736,12 @@ export default function Forecast() {
                   <tbody>
                     {tier2Preview.rows.map((r) => (
                       <tr key={r.item_id} onClick={() => openDetail(r.item_id)} style={{ cursor: "pointer" }}>
-                        <td style={{ fontWeight: 600 }}>{r.name}</td>
+                        <td style={{ fontWeight: 600 }}>
+                          {r.name}
+                          {parseMethod(r.method).discontinuing && (
+                            <DiscontinuingBadge label={t("fc_discontinuing_badge")} />
+                          )}
+                        </td>
                         <td className="dim">{r.category ?? "—"}</td>
                         <td className="dim">{methodLabel(r.method)}</td>
                         <td className="num mono dim"
@@ -533,7 +773,12 @@ export default function Forecast() {
         <div className="card stripe-card brand" style={{ marginTop: 18 }}>
           <div className="hd">
             <div>
-              <h3>{t("fc_detail_title", { name: detail.item.name })}</h3>
+              <h3>
+                {t("fc_detail_title", { name: detail.item.name })}
+                {parseMethod(detail.method).discontinuing && (
+                  <DiscontinuingBadge label={t("fc_discontinuing_badge")} />
+                )}
+              </h3>
               <div className="desc">
                 {detail.item.category} ・ {methodLabel(detail.method)}
                 {detail.item.moq ? ` ・ ${t("fc_moq")}: ${fmtQty(detail.item.moq)}` : ""}
@@ -544,6 +789,11 @@ export default function Forecast() {
                   ? ` ・ ${t("fc_stock_now")}: ${fmtQty(detail.stock.sap_qty ?? detail.stock.one_balance)}`
                   : ""}
               </div>
+              {parseMethod(detail.method).discontinuing && (
+                <div className="dim" style={{ fontSize: "0.76rem", marginTop: 4, color: "var(--red)" }}>
+                  {t("fc_discontinuing_tooltip")}
+                </div>
+              )}
             </div>
             <button className="btn" onClick={() => setDetail(null)}>
               {t("fc_detail_close")}
@@ -743,6 +993,7 @@ export default function Forecast() {
                   {list.rows.map((r) => {
                     const tier = confidenceTier(r.wape);
                     const lowTrust = tier === "poor";
+                    const { discontinuing } = parseMethod(r.method);
                     return (
                     <tr
                       key={r.item_id}
@@ -759,6 +1010,7 @@ export default function Forecast() {
                             {t("fc_adjusted_badge")}
                           </span>
                         )}
+                        {discontinuing && <DiscontinuingBadge label={t("fc_discontinuing_badge")} />}
                       </td>
                       <td className="dim">{r.category ?? "—"}</td>
                       <td className="dim">{methodLabel(r.method)}</td>

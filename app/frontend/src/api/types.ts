@@ -93,12 +93,14 @@ export interface ForecastCategory {
   items: number;
   next3_total: number;
   next12_total: number;
+  no_stock_tracking_items?: number;
 }
 
 export interface ForecastSummary {
   run: ForecastRunInfo | null;
   orders_needed?: number;
   categories: ForecastCategory[];
+  excluded_no_stock_tracking?: { items: number; next3_total: number; next12_total: number };
 }
 
 export interface ForecastRow {
@@ -121,6 +123,28 @@ export interface ForecastList {
   total: number;
   months: string[];
   rows: ForecastRow[];
+}
+
+export interface OrderSuggestionRow {
+  item_id: number;
+  name: string;
+  category: string | null;
+  method: string | null;
+  stock: number | null;
+  safety_stock: number;
+  order_qty: number;
+  order_by: string;
+  breach_month: string;
+}
+
+export interface OrderSuggestions {
+  run: ForecastRunInfo | null;
+  total: number;
+  total_qty: number;
+  rows: OrderSuggestionRow[];
+  by_category: { category: string; items: number; qty: number }[];
+  by_month: { month: string; items: number }[];
+  negative_stock_count: number;
 }
 
 export interface MonthQty {

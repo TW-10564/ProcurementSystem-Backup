@@ -12,7 +12,7 @@ from .models import Base, Snapshot, PlanValue, StockState, Actual, Item
 from .ingestion import one_master, notepc_forecast, planning4, planning1, subfiles, sap
 from .ingestion.excel import file_meta
 from .registry.build import (build_registry, resolve,
-                             build_normalized_alias_index, resolve_normalized)
+                             build_normalized_alias_index, resolve_any)
 
 import sys
 from pathlib import Path as _Path
@@ -34,23 +34,20 @@ def _snapshot(session, path, sheet, rows, status, note=""):
 
 def _resolve_planning1(session, norm_index, name):
     """FIX_PLAN M4: try each documented naming-convention variant (see
-    ingestion/planning1.candidate_variants) against both exact and
-    normalized (width/spacing-insensitive) alias resolution before giving
-    up. Returns (item, used_variant) — used_variant lets the caller report
-    how many resolutions needed a variant vs matched as-is."""
+    ingestion/planning1.candidate_variants) via the standard resolve_any
+    (exact, then normalized) before giving up. Returns (item, used_variant)
+    — used_variant lets the caller report how many resolutions needed a
+    variant vs matched as-is (exact or normalized alone)."""
     for variant in planning1.candidate_variants(name):
-        item = resolve(session, variant)
-        if item is None:
-            item = resolve_normalized(norm_index, variant)
+        item = resolve_any(session, norm_index, variant)
         if item is not None:
             return item, (variant != name)
     return None, False
 
 
-def _ingest_plan_rows(session, snap, rows, level, resolved_counter):
+def _ingest_plan_rows(session, norm_index, snap, rows, level, resolved_counter):
     unresolved = 0
     fuzzy_matched = 0
-    norm_index = build_normalized_alias_index(session) if level == "planning1" else None
     for p in rows:
         name = p.get("raw_name") or p.get("adana")
         if level == "planning1":
@@ -60,7 +57,7 @@ def _ingest_plan_rows(session, snap, rows, level, resolved_counter):
                 if item is not None:
                     fuzzy_matched += 1
         else:
-            item = resolve(session, name)
+            item = resolve_any(session, norm_index, name)
         if item is None:
             unresolved += 1
         session.add(PlanValue(snapshot_id=snap.id, item_id=item.id if item else None,
@@ -99,10 +96,24 @@ def run() -> dict:
     session = get_session()
     resolved_counter: dict[str, tuple] = {}
 
+    # Standardized mapping (2026-07-08): ONE normalized-alias index, built
+    # once right after the registry commits all aliases, threaded through
+    # EVERY ingestion path below (master, ④, ①, sub-files, SAP) via
+    # resolve_any. Previously each path grew its own copy of "try exact,
+    # then fall back to width/spacing/case-insensitive matching" — SAP and
+    # ①販売計画 had it, master/④/sub-files/SAP didn't, so a name that only
+    # differed by case or fullwidth-vs-halfwidth (e.g. a CPU recorded as
+    # 'Ry53400G' in one file and 'ry53400G' in another) silently failed to
+    # resolve depending on which ingestion path happened to see it first.
+    # One shared index + one shared resolver means every future monthly
+    # rebuild gets the same matching quality everywhere, automatically.
+    norm_index = build_normalized_alias_index(session)
+
     # 2. master plan values (level='master')
     fc = one_master.parse_parts_forecast()
     snap = _snapshot(session, ONE_MASTER, "部品予測", len(fc["plan"]), "PASS")
-    unresolved = _ingest_plan_rows(session, snap, fc["plan"], "master", resolved_counter)
+    unresolved = _ingest_plan_rows(session, norm_index, snap, fc["plan"], "master",
+                                   resolved_counter)
     print(f"[master 部品予測] plan cells={len(fc['plan'])}  "
           f"months={len(fc['months'])} ({fc['months'][0]}→{fc['months'][-1]})  "
           f"unresolved rows={unresolved}")
@@ -113,8 +124,8 @@ def run() -> dict:
     notepc_fc = notepc_forecast.parse_notepc_forecast()
     notepc_snap = _snapshot(session, NOTE_ONE_MASTER, "部品予測",
                             len(notepc_fc["plan"]), "PASS")
-    notepc_unresolved = _ingest_plan_rows(session, notepc_snap, notepc_fc["plan"],
-                                          "master", resolved_counter)
+    notepc_unresolved = _ingest_plan_rows(session, norm_index, notepc_snap,
+                                          notepc_fc["plan"], "master", resolved_counter)
     print(f"[NotePC 部品予測] plan cells={len(notepc_fc['plan'])}  "
          f"months={len(notepc_fc['months'])} "
          f"({notepc_fc['months'][0]}→{notepc_fc['months'][-1]})  "
@@ -124,14 +135,16 @@ def run() -> dict:
     p4 = [p for p in planning4.parse_one_paste() if p["month"] and p["value"] is not None]
     f4 = planning_file("④")
     snap4 = _snapshot(session, f4, "その他ONE貼り付け", len(p4), "PASS")
-    unresolved4 = _ingest_plan_rows(session, snap4, p4, "planning4", resolved_counter)
+    unresolved4 = _ingest_plan_rows(session, norm_index, snap4, p4, "planning4",
+                                    resolved_counter)
     print(f"[④ONE貼り付け] rows={len(p4)}  unresolved={unresolved4}")
 
     # 4. planning ①販売計画 (level='planning1') — model-level seed, pre-attach
     p1 = planning1.parse_plan1()
     f1 = planning_file("①")
     snap1 = _snapshot(session, f1, "コンシューマー+コマーシャル", len(p1), "PASS")
-    unresolved1 = _ingest_plan_rows(session, snap1, p1, "planning1", resolved_counter)
+    unresolved1 = _ingest_plan_rows(session, norm_index, snap1, p1, "planning1",
+                                    resolved_counter)
     print(f"[①販売計画] rows={len(p1)}  unresolved={unresolved1}  "
           f"(model names rarely match 綽名 directly — expected, needs ﾏｽﾀ bridge)")
 
@@ -149,12 +162,12 @@ def run() -> dict:
         snap_s = _snapshot(session, srcpath, "部品詳細",
                            len(result["series"]) + len(result["stock"]), "PASS", st["note"])
         for p in result["series"]:
-            item = resolve(session, p["adana"])
+            item = resolve_any(session, norm_index, p["adana"])
             session.add(PlanValue(snapshot_id=snap_s.id, item_id=item.id if item else None,
                                   raw_name=p["adana"], month=p["month"], level="one_row",
                                   value=p["value"], source_cell=p["cell"]))
         for s in result["stock"]:
-            item = resolve(session, s["adana"])
+            item = resolve_any(session, norm_index, s["adana"])
             session.add(StockState(item_id=item.id if item else None, raw_name=s["adana"],
                                    snapshot_date=s["snapshot"], one_balance=s["balance"],
                                    one_stock_days=s["days"], safety_days=s["safety_days"],
@@ -174,18 +187,14 @@ def run() -> dict:
     if sap_result["path"]:
         matched = 0
         matched_via_normalization = 0
-        norm_index = None   # built lazily, only if an exact match ever misses
         for adana, qty in sap_result["rows"].items():
-            item = resolve(session, adana)
-            if item is None:
-                # FIX_PLAN M3: exact-string resolve() leaves a row unmatched
-                # when the あだ名 (direct or crosswalk-recovered) differs from
-                # the stored ONE alias only by width/spacing/hyphenation.
-                if norm_index is None:
-                    norm_index = build_normalized_alias_index(session)
-                item = resolve_normalized(norm_index, adana)
-                if item is not None:
-                    matched_via_normalization += 1
+            exact_hit = resolve(session, adana) is not None
+            # FIX_PLAN M3: exact-string resolve() leaves a row unmatched
+            # when the あだ名 (direct or crosswalk-recovered) differs from
+            # the stored ONE alias only by width/spacing/hyphenation.
+            item = resolve_any(session, norm_index, adana)
+            if item is not None and not exact_hit:
+                matched_via_normalization += 1
             if item:
                 matched += 1
             session.add(StockState(item_id=item.id if item else None, raw_name=adana,
@@ -220,6 +229,23 @@ def run() -> dict:
           " — overall resolution below 95% (expected: ①/planning1 has low "
           "resolution since model names ≠ 綽名 without the alias bridge; "
           "master/④/one_row should each be ~100%)"))
+
+    # 8. source reconciliation — master vs sub-file disagreement, near-term
+    # months only (see verify/reconciliation.py). Flags, doesn't resolve:
+    # a disagreement can be a genuine planning-meeting revision in master
+    # OR a formula error — needs a human look either way.
+    from .verify import reconciliation as reconciliation_mod
+    recon = reconciliation_mod.run(session)
+    report["reconciliation"] = recon
+    if recon["count"]:
+        print(f"[reconciliation] {recon['count']} item-months where master and "
+              f"the sub-file disagree by >{reconciliation_mod.MIN_RELATIVE_PCT:.0f}% "
+              f"({recon['affected_items']} items) — needs human review, see "
+              f"/reports/source-reconciliation or the 検証 workbook")
+    else:
+        print("[reconciliation] no significant master/sub-file disagreements "
+              "in the near-term window")
+
     session.close()
     return report
 

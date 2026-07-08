@@ -242,3 +242,22 @@ def resolve_normalized(index: dict[str, Item], name: str) -> Item | None:
     build_normalized_alias_index) — width/spacing/hyphen-insensitive."""
     key = _norm_for_crosswalk(name)
     return index.get(key) if key else None
+
+
+def resolve_any(session, norm_index: dict[str, Item], name: str) -> Item | None:
+    """The standard resolution path for every ingestion source: exact
+    resolve() first (preserves its deterministic tie-break), normalized
+    (width/spacing/hyphen/case-insensitive) fallback second.
+
+    Standardized 2026-07-08 after three ingestion paths (SAP, ①販売計画,
+    and an ad-hoc cross-check against a teammate's spreadsheet) each grew
+    their own copy of "try exact, then normalized" — a real cross-system
+    name difference (e.g. a CPU recorded as 'Ry53400G' in one file and
+    'ry53400G' in another) isn't unique to any one source, so the fallback
+    belongs in one shared place every ingestion path calls, not
+    reimplemented per-caller. norm_index should be built ONCE per build
+    run via build_normalized_alias_index (after build_registry() commits
+    all aliases) and threaded through every call — rebuilding it per row
+    would be a full alias-table scan per row."""
+    item = resolve(session, name)
+    return item if item is not None else resolve_normalized(norm_index, name)

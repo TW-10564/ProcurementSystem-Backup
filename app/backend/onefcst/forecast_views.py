@@ -164,6 +164,24 @@ def _suggestion(item: Item, stock: StockState | None, demand: list[float]) -> di
     return s
 
 
+def _is_unactionable_estimate(method: str | None, stock: StockState | None) -> bool:
+    """True for the category-average fallback (engine/tier2.category_typical_rate
+    — a rate borrowed from category PEERS, not the item's own consumption,
+    for items with ZERO history of their own) on an item that ALSO has no
+    stock record in either SAP or ONE.
+
+    Found 2026-07-08: every one of these items structurally can never
+    produce an order suggestion (_suggestion requires a stock balance to
+    project from) — the forecast number exists but nothing procurement can
+    act on ever attaches to it. Rolling it into the headline next3/next12
+    totals overstates what's actually plannable; it's excluded there but
+    still fully visible per-item in list_forecasts/item_detail, and counted
+    separately here so it isn't silently dropped."""
+    if method != "tier2_category_average":
+        return False
+    return stock is None or (stock.one_balance is None and stock.sap_qty is None)
+
+
 def summary(session) -> dict:
     run = _latest_run(session)
     if run is None:
@@ -175,20 +193,33 @@ def summary(session) -> dict:
 
     cats: dict[str, dict] = {}
     orders_needed = 0
+    excluded_items = 0
+    excluded_next3 = 0.0
+    excluded_next12 = 0.0
     for item_id, rows in by_item.items():
         item = items.get(item_id)
         if item is None:
             continue
         cat = item.category or "（未分類）"
         c = cats.setdefault(cat, {"category": cat, "items": 0,
-                                  "next3_total": 0.0, "next12_total": 0.0})
+                                  "next3_total": 0.0, "next12_total": 0.0,
+                                  "no_stock_tracking_items": 0})
         c["items"] += 1
         months = [_as_date(f.month) for f in rows]
         qtys, _ = _apply_adjustments(item_id, months, [f.baseline or 0.0 for f in rows],
                                      adjustments)
-        c["next3_total"] += sum(qtys[:3])
-        c["next12_total"] += sum(qtys[:12])
-        sugg = _suggestion(item, stocks.get(item_id), qtys)
+        stock = stocks.get(item_id)
+
+        if _is_unactionable_estimate(rows[0].method, stock):
+            c["no_stock_tracking_items"] += 1
+            excluded_items += 1
+            excluded_next3 += sum(qtys[:3])
+            excluded_next12 += sum(qtys[:12])
+        else:
+            c["next3_total"] += sum(qtys[:3])
+            c["next12_total"] += sum(qtys[:12])
+
+        sugg = _suggestion(item, stock, qtys)
         if sugg and sugg["action"] == "suggest_order":
             orders_needed += 1
 
@@ -196,7 +227,72 @@ def summary(session) -> dict:
         c["next3_total"] = round(c["next3_total"])
         c["next12_total"] = round(c["next12_total"])
     return {"run": _run_info(run), "orders_needed": orders_needed,
-            "categories": sorted(cats.values(), key=lambda c: -c["next12_total"])}
+            "categories": sorted(cats.values(), key=lambda c: -c["next12_total"]),
+            "excluded_no_stock_tracking": {"items": excluded_items,
+                                           "next3_total": round(excluded_next3),
+                                           "next12_total": round(excluded_next12)}}
+
+
+def order_suggestions(session) -> dict:
+    """The full detail behind summary()'s "orders needed" count — every
+    item that actually needs a purchase order, with the numbers a buyer
+    needs to assess real need at a glance: current stock, suggested
+    quantity, and how soon. Built so the KPI on the dashboard is never a
+    number without a way to see what it's counting."""
+    run = _latest_run(session)
+    if run is None:
+        return {"run": None, "total": 0, "rows": [], "by_category": [],
+               "by_month": [], "negative_stock_count": 0, "total_qty": 0}
+    by_item = _forecast_rows(session, run.id)
+    items = {i.id: i for i in session.query(Item).all()}
+    stocks = _stock_by_item(session)
+    adjustments = _latest_adjustments(session)
+
+    rows = []
+    for item_id, frows in by_item.items():
+        item = items.get(item_id)
+        if item is None:
+            continue
+        month_dates = [_as_date(f.month) for f in frows]
+        months = [m.isoformat() for m in month_dates]
+        qtys, _ = _apply_adjustments(item_id, month_dates,
+                                     [f.baseline or 0.0 for f in frows], adjustments)
+        stock = stocks.get(item_id)
+        sugg = _suggestion(item, stock, qtys)
+        if not sugg or sugg["action"] != "suggest_order":
+            continue
+        balance = stock.sap_qty if stock and stock.sap_qty is not None else (
+            stock.one_balance if stock else None)
+        rows.append({
+            "item_id": item_id, "name": item.canonical_name, "category": item.category,
+            "method": frows[0].method,
+            "stock": round(balance, 1) if balance is not None else None,
+            "safety_stock": sugg["safety_stock"],
+            "order_qty": sugg["suggested_qty"],
+            "order_by": months[sugg["order_by_month_index"]],
+            "breach_month": months[sugg["breach_month_index"]],
+        })
+    rows.sort(key=lambda r: (r["order_by"], -r["order_qty"]))
+
+    by_category: dict[str, dict] = {}
+    by_month: dict[str, int] = {}
+    negative_stock_count = 0
+    total_qty = 0.0
+    for r in rows:
+        cat = r["category"] or "（未分類）"
+        c = by_category.setdefault(cat, {"category": cat, "items": 0, "qty": 0.0})
+        c["items"] += 1
+        c["qty"] += r["order_qty"]
+        by_month[r["order_by"]] = by_month.get(r["order_by"], 0) + 1
+        total_qty += r["order_qty"]
+        if r["stock"] is not None and r["stock"] < 0:
+            negative_stock_count += 1
+
+    return {"run": _run_info(run), "total": len(rows), "rows": rows,
+           "total_qty": round(total_qty),
+           "by_category": sorted(by_category.values(), key=lambda c: -c["qty"]),
+           "by_month": [{"month": m, "items": n} for m, n in sorted(by_month.items())],
+           "negative_stock_count": negative_stock_count}
 
 
 def list_forecasts(session, q: str = "", category: str | None = None,
@@ -292,17 +388,26 @@ def item_detail(session, item_id: int) -> dict | None:
     # FIX_PLAN C4: same latest-snapshot-wins fix as forecasting._series_by_item
     # — a re-ingested (corrected) month must not be averaged with the stale
     # value it replaced.
-    plan_rows_raw = (session.query(PlanValue.month, PlanValue.value,
-                                   PlanValue.snapshot_id, Snapshot.file_mtime)
-                     .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
-                     .filter(PlanValue.item_id == item_id, PlanValue.level == "master",
-                             PlanValue.value.isnot(None))
-                     .order_by(PlanValue.month, Snapshot.file_mtime.asc(),
-                              PlanValue.snapshot_id.asc())
-                     .all())
-    latest_by_month: dict[date, float] = {}
-    for m, v, _sid, _mtime in plan_rows_raw:
-        latest_by_month[_as_date(m)] = v          # later (latest) overwrites
+    def _latest_by_month(level: str) -> dict[date, float]:
+        rows = (session.query(PlanValue.month, PlanValue.value,
+                              PlanValue.snapshot_id, Snapshot.file_mtime)
+               .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
+               .filter(PlanValue.item_id == item_id, PlanValue.level == level,
+                       PlanValue.value.isnot(None))
+               .order_by(PlanValue.month, Snapshot.file_mtime.asc(),
+                        PlanValue.snapshot_id.asc())
+               .all())
+        out: dict[date, float] = {}
+        for m, v, _sid, _mtime in rows:
+            out[_as_date(m)] = v                  # later (latest) overwrites
+        return out
+
+    # Per-MONTH merge, master preferred (see forecasting._series_by_item for
+    # why this can't be a whole-item "or": master coverage commonly STOPS
+    # partway through an item's timeline rather than being all-or-nothing).
+    master_by_month = _latest_by_month("master")
+    one_row_by_month = _latest_by_month("one_row")
+    latest_by_month = {**one_row_by_month, **master_by_month}
     plan_rows = sorted(latest_by_month.items())
     history = [{"month": m.isoformat(), "qty": round(v, 1)}
                for m, v in plan_rows if m < start][-24:]

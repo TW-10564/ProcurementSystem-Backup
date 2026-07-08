@@ -108,8 +108,26 @@ def generate_tier2(session, run, series: dict[int, dict[date, float]],
             continue
         forecasted += 1
         forecasted_ids.add(item_id)
+        # same known-plan override as the SKU engine (baseline.make_forecast)
+        # — an attach-rate GUESS for a month the item's own source data
+        # already has a real, committed number for is worse than just
+        # using that number.
+        # "tier2_known_plan", not bare "known_plan" — forecasting.generate()'s
+        # n_by_method bookkeeping counts the SKU engine's own "known_plan"
+        # label separately from tier2's stages; reusing the same string
+        # would silently double up that count against a different total.
+        rows, n_overridden = baseline.apply_known_plan(rows, obs)
+        if n_overridden == len(rows):
+            row_method = "tier2_known_plan"
+        elif n_overridden > 0:
+            row_method = f"{METHOD}+known_plan"
+        else:
+            row_method = METHOD
+        rows, discontinuing = baseline.apply_discontinuation_signal(rows, obs)
+        if discontinuing:
+            row_method = f"{row_method}+discontinuing"
         session.add_all([Forecast(run_id=run.id, item_id=item_id, month=m,
-                                  baseline=v, method=METHOD) for m, v in rows])
+                                  baseline=v, method=row_method) for m, v in rows])
 
         ev = tier2_engine.holdout_eval(obs, tier1_hist, start)
         if ev and ev["wape"] is not None:

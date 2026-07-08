@@ -236,11 +236,127 @@ def holdout_eval(obs: dict[date, float], start_month: date,
             "m1_err": m1, "m1_actual": abs(actual[0])}
 
 
+KNOWN_PLAN_OUTLIER_MULTIPLE = 15   # same guard, same threshold, as
+                                    # engine/tier2.sanitize_series — the
+                                    # documented 部品予測 chain-formula bug
+                                    # (one future month exploding to
+                                    # millions for every affected SKU) lives
+                                    # in the SAME plan_value data this reads.
+
+
+def apply_known_plan(rows: list[tuple[date, float]],
+                     obs: dict[date, float]) -> tuple[list[tuple[date, float]], int]:
+    """Override any forecast month with the source data's OWN already-
+    entered value for that exact month, when one exists AND it isn't the
+    documented source-file corruption (see KNOWN_PLAN_OUTLIER_MULTIPLE).
+
+    Found 2026-07-08 during a Data Summary cross-check: obs already carries
+    every month the source data covers — past AND future alike, since
+    forecasting._series_by_item builds it from the full plan_value history
+    without filtering by date. The statistical methods deliberately build
+    their fitting window from months strictly before start_month (see
+    build_window), so a real, already-committed number for month M+1/M+2/
+    M+3 sitting right there in 部品予測 or the sub-file's own 生産計画 was
+    never used — the pipeline always re-derived a fresh guess instead, even
+    when the business had already decided the number. Measured impact:
+    forecast vs the known plan ran +6.7% high one month out, growing to
+    +24-25% two-three months out, as the (necessarily flatter) statistical
+    projection failed to track an already-decided decline the source data
+    already showed. A month that's already been decided is not a month to
+    guess at — this only affects the ~4-month window where the business
+    actually has committed numbers (see project notes); further out, obs
+    has no entry and the statistical projection is unchanged.
+
+    Found immediately after shipping the above: blindly trusting ANY future
+    obs value reopened the exact corruption engine/tier2.sanitize_series
+    already guards against elsewhere in this same data (one far-future
+    month's coefficient exploding to absurd values for an affected SKU) —
+    this override has its own copy of that guard so a corrupted "known"
+    value can never win over a sane statistical one. Returns (rows,
+    n_overridden) so the caller can label which months came from the real
+    plan vs a genuine statistical projection."""
+    # sorted by month, not dict-iteration order: obs is a per-month merge of
+    # two sources (master preferred, one_row fallback — see
+    # forecasting._series_by_item) built as one dict.update()'d onto
+    # another, so its iteration order is NOT chronological — master-only
+    # months (which can include ancient history one_row never covered)
+    # land at the end of iteration order regardless of their actual date.
+    # Found 2026-07-08: this silently fed the "trailing 12" slice a
+    # handful of stray 2017-era near-zero months instead of the real
+    # recent window, making the corruption guard reject perfectly
+    # legitimate near-term known values as false-positive outliers.
+    recent_sorted = sorted((m, v) for m, v in obs.items()
+                          if rows and m < rows[0][0] and v and v > 0)
+    recent_level = (statistics.median(v for _, v in recent_sorted[-12:])
+                    if recent_sorted else None)
+    out = []
+    n_overridden = 0
+    for m, v in rows:
+        known = obs.get(m)
+        is_corrupt = (known is not None and recent_level
+                     and known > recent_level * KNOWN_PLAN_OUTLIER_MULTIPLE)
+        if known is not None and not is_corrupt:
+            out.append((m, known))
+            n_overridden += 1
+        else:
+            out.append((m, v))
+    return out, n_overridden
+
+
+DISCONTINUATION_MIN_ZERO_MONTHS = 2  # consecutive KNOWN (not guessed) near-
+                                     # zero months, immediately following
+                                     # real historical demand, treated as a
+                                     # likely wind-down rather than a data gap
+
+
+def _is_likely_discontinuing(rows: list[tuple[date, float]],
+                             obs: dict[date, float]) -> bool:
+    """True when this item has real prior demand AND its own known
+    (already-committed, not statistically guessed) months run to zero for
+    DISCONTINUATION_MIN_ZERO_MONTHS+ in a row right up to where the known
+    window ends.
+
+    Found 2026-07-08: an established item (54 months of real history) had
+    its known plan correctly show zero for 4 straight confirmed months
+    (a real transition) — but the month right after the known window ran
+    out, the forecast jumped back to ~6,000 units, because the statistical
+    method has no concept of "this is winding down" and just extrapolated
+    the OLD historical average once it ran out of known data to override.
+    A sustained run of confirmed zeros is strong enough evidence to keep
+    projecting zero into the unknown tail too, rather than silently
+    reverting to pre-transition volume."""
+    if not rows:
+        return False
+    horizon_start = rows[0][0]
+    has_prior_history = any(v and v > 0 for m, v in obs.items() if m < horizon_start)
+    if not has_prior_history:
+        return False
+    run = 0
+    for m, _ in rows:
+        if m not in obs:
+            break                          # known window ended — evaluate the run so far
+        run = run + 1 if abs(obs[m]) < 1e-9 else 0
+    return run >= DISCONTINUATION_MIN_ZERO_MONTHS
+
+
+def apply_discontinuation_signal(rows: list[tuple[date, float]],
+                                 obs: dict[date, float]) -> tuple[list[tuple[date, float]], bool]:
+    """When _is_likely_discontinuing fires, carry the confirmed zero
+    forward into every month beyond the known window too (months already
+    in obs are untouched — apply_known_plan already set them correctly).
+    Returns (rows, triggered) so the caller can label the method."""
+    if not _is_likely_discontinuing(rows, obs):
+        return rows, False
+    return [(m, obs[m]) if m in obs else (m, 0.0) for m, v in rows], True
+
+
 def make_forecast(obs: dict[date, float], start_month: date,
                   horizon: int = 12) -> tuple[list[tuple[date, float]], str] | None:
     """Full pipeline for one SKU: pick the method that won this SKU's
-    hold-out (DEFAULT_METHOD when no hold-out is possible) and forecast the
-    full window with it. None → item skipped (stale / no usable history)."""
+    hold-out (DEFAULT_METHOD when no hold-out is possible), forecast the
+    full window with it, then let any already-known future plan value
+    override the statistical guess for that specific month (see
+    apply_known_plan). None → item skipped (stale / no usable history)."""
     if not obs or is_stale(obs, start_month):
         return None
     window = build_window(obs, start_month)
@@ -253,4 +369,12 @@ def make_forecast(obs: dict[date, float], start_month: date,
     method = ev["winner"] if ev and ev["winner"] in cands else DEFAULT_METHOD
     if method not in cands:
         method = next(iter(cands))
-    return cands[method], method
+    rows, n_overridden = apply_known_plan(cands[method], obs)
+    if n_overridden == len(rows):
+        method = "known_plan"
+    elif n_overridden > 0:
+        method = f"{method}+known_plan"
+    rows, discontinuing = apply_discontinuation_signal(rows, obs)
+    if discontinuing:
+        method = f"{method}+discontinuing"
+    return rows, method

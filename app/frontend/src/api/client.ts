@@ -10,6 +10,7 @@ import type {
   LlmDraftResult,
   MismatchReport,
   Notification,
+  OrderSuggestions,
   PlannerAccuracy,
 } from "./types";
 
@@ -99,6 +100,9 @@ export const api = {
 
   runForecast: () =>
     http.post<ForecastRunInfo>("/forecasts/run").then((r) => r.data),
+
+  orderSuggestions: () =>
+    http.get<OrderSuggestions>("/forecasts/order-suggestions").then((r) => r.data),
 
   mismatchReport: () => http.get<MismatchReport>("/reports/mismatch").then((r) => r.data),
 

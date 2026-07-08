@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from onefcst.models import Base, Item, ItemAlias
 from onefcst.registry.build import (_norm_for_crosswalk, build_normalized_alias_index,
-                                    resolve_normalized, resolve)
+                                    resolve_normalized, resolve, resolve_any)
 
 
 @pytest.fixture()
@@ -46,3 +46,26 @@ def test_resolve_normalized_recovers_a_width_and_spacing_mismatch(session):
 def test_resolve_normalized_returns_none_for_no_match(session):
     index = build_normalized_alias_index(session)
     assert resolve_normalized(index, "no such alias") is None
+
+
+def test_resolve_any_is_the_standard_exact_then_normalized_path(session):
+    """resolve_any is now the single shared resolver every ingestion path
+    (master, ④, ①, sub-files, SAP) calls — a cross-system case difference
+    like 'Ry53400G' vs the stored 'ry53400G' must resolve through it
+    regardless of which source happens to hit it first."""
+    item = Item(canonical_name="ry53400G", kind="part")
+    session.add(item)
+    session.flush()
+    session.add(ItemAlias(item_id=item.id, alias="ry53400G", source_system="ONE綽名"))
+    session.commit()
+    index = build_normalized_alias_index(session)
+
+    assert resolve(session, "ry53400G") is not None       # exact still works
+    assert resolve(session, "Ry53400G") is None            # exact alone fails on case
+    resolved = resolve_any(session, index, "Ry53400G")
+    assert resolved is not None and resolved.id == item.id
+
+
+def test_resolve_any_returns_none_when_nothing_matches_either_way(session):
+    index = build_normalized_alias_index(session)
+    assert resolve_any(session, index, "no such alias anywhere") is None

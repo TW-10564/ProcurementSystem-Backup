@@ -9,6 +9,7 @@ Also captures the current 在庫残高/在庫日数 snapshot per SKU.
 from __future__ import annotations
 
 import sys
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
@@ -25,9 +26,21 @@ from .excel import col_letter                              # noqa: E402
 def parse_subfile_series(cat: str, snapshot_date: date | None = None) -> dict:
     """One category file → {'series': [...], 'stock': [...], 'stats': {...}}.
 
-    series: one record per SKU × month from the 生産計画 row (monthly cols only —
-            部品詳細 headers mix weekly/monthly; we keep day==1 columns).
-    """
+    series: one record per SKU × month, SUMMED from the 生産計画 row's DAILY
+    columns for that calendar month.
+
+    Found 2026-07-08 during a Data Summary cross-check: every one of the 17
+    sub-files has purely DAILY date columns (confirmed: 1-day gaps, ~730-800
+    columns spanning ~2 years) — there is no separate "monthly" column. The
+    previous version picked out only the column whose date happened to land
+    on day==1 and used THAT SINGLE DAY's value as if it were the whole
+    month's total, undercounting by roughly the number of days in the month
+    (~30x). This went unnoticed because master-level 部品予測 data (a
+    different, genuinely-monthly file) wins over this one_row series for
+    every item that has both — only items with ZERO master history (11 OS
+    licenses + a few others) ever actually depend on this series, which is
+    exactly where the ~30x undercount surfaced as a near-total forecast
+    miss."""
     cfg = FILES[cat]
     snapshot_date = snapshot_date or date.today()
     path = Path(cfg.get("_abspath") or (BASE / cfg["file"]))
@@ -51,7 +64,9 @@ def parse_subfile_series(cat: str, snapshot_date: date | None = None) -> dict:
         d = to_date(v)
         if d:
             date_cols[c] = d
-    month_cols = {c: d for c, d in date_cols.items() if d.day == 1}
+    cols_by_month: dict[date, list[int]] = defaultdict(list)
+    for c, d in date_cols.items():
+        cols_by_month[d.replace(day=1)].append(c)
     sorted_dates = sorted(date_cols.items(), key=lambda x: x[1])
     snap_col = next((c for c, d in sorted_dates if d >= snapshot_date),
                     sorted_dates[-1][0] if sorted_dates else None)
@@ -71,11 +86,12 @@ def parse_subfile_series(cat: str, snapshot_date: date | None = None) -> dict:
             i += 4
             continue
         stats["skus"] += 1
-        for c, d in month_cols.items():
-            v = to_float(r0.get(c))
-            if v is not None:
-                series.append({"adana": sku, "month": d.replace(day=1), "value": v,
-                               "cell": f"部品詳細!{col_letter(c)}{i + 1}"})
+        for month, cols in cols_by_month.items():
+            values = [v for c in cols if (v := to_float(r0.get(c))) is not None]
+            if values:
+                series.append({"adana": sku, "month": month, "value": sum(values),
+                               "cell": f"部品詳細!{col_letter(cols[0])}{i + 1}"
+                                       f"..{col_letter(cols[-1])}{i + 1}"})
                 stats["cells"] += 1
         if snap_col is not None:
             stock.append({"adana": sku,

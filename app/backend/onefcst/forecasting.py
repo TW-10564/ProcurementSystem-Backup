@@ -28,8 +28,9 @@ METHOD_VERSION = "sku-selected-v3"  # v3 adds combo (avg-of-candidates), M+1 rep
 DEFAULT_HORIZON = 12
 
 
-def _series_by_item(session) -> dict[int, dict[date, float]]:
-    """{item_id: {month: value}} from master-level plan values.
+def _level_series(session, level: str) -> dict[int, dict[date, float]]:
+    """{item_id: {month: value}} for one PlanValue.level, latest-snapshot-
+    wins per (item, month).
 
     FIX_PLAN C4: duplicate (item, month) rows happen when a source file is
     re-ingested after a correction — the earlier (now-stale) snapshot's row
@@ -41,7 +42,7 @@ def _series_by_item(session) -> dict[int, dict[date, float]]:
     rows = (session.query(PlanValue.item_id, PlanValue.month, PlanValue.value,
                           PlanValue.snapshot_id, Snapshot.file_mtime)
             .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
-            .filter(PlanValue.level == "master", PlanValue.item_id.isnot(None),
+            .filter(PlanValue.level == level, PlanValue.item_id.isnot(None),
                     PlanValue.value.isnot(None))
             .order_by(PlanValue.item_id, PlanValue.month,
                      Snapshot.file_mtime.asc(), PlanValue.snapshot_id.asc())
@@ -52,6 +53,36 @@ def _series_by_item(session) -> dict[int, dict[date, float]]:
             month = date.fromisoformat(month)
         out.setdefault(item_id, {})[month] = float(value)   # later (latest) overwrites
     return out
+
+
+def _series_by_item(session) -> dict[int, dict[date, float]]:
+    """{item_id: {month: value}} of demand history, master-level plan
+    values preferred PER MONTH.
+
+    Cross-check against Data Summary.xlsx (2026-07-08) found 20 items —
+    11 OS licenses (ｿﾌﾄｳｪｱS) plus a handful of others — with ZERO
+    master-level history: their consumption only ever appears in the
+    one_row level (the 17 ONE 部品詳細 sub-files' own series; see
+    ingestion/subfiles.py), never in ONE計画 部品予測 itself.
+
+    The merge is per (item, month), not per item: an earlier version fell
+    back to one_row only when an item had NO master rows AT ALL, which
+    missed the much more common case of an item whose master coverage
+    simply STOPS partway through (e.g. a memory SKU being phased out —
+    master has real history through April, then goes silent for May
+    onward, while the sub-file's own series keeps recording explicit
+    zeros for those same months because it's still tracked there). Master
+    wins for any month it actually covers; one_row fills in only the
+    months master is silent on, for every item, not just the 20 with zero
+    master coverage."""
+    master = _level_series(session, "master")
+    one_row = _level_series(session, "one_row")
+    merged: dict[int, dict[date, float]] = {}
+    for item_id in set(master) | set(one_row):
+        combined = dict(one_row.get(item_id, {}))
+        combined.update(master.get(item_id, {}))    # master wins per-month
+        merged[item_id] = combined
+    return merged
 
 
 def _unbiased_score(obs: dict[date, float], start: date) -> dict | None:

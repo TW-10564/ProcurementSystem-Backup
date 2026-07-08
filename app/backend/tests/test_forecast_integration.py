@@ -45,9 +45,25 @@ def test_run_is_internally_consistent(session):
                   + tier2["category_fallback"]["items_forecasted"])
     assert len(rows) == total_items * note["horizon"]
     assert all((r.baseline or 0) >= 0 for r in rows)
-    assert all(r.method in ("seasonal", "trend", "flat3", "flat6", "median6", "combo",
-                            "tier2_attach_rate", "tier2_category_average")
-               for r in rows)
+    # "known_plan" / "<method>+known_plan": a month the source data already
+    # has a real, committed number for overrides the statistical guess —
+    # see engine/baseline.apply_known_plan. "+discontinuing" is appended
+    # when a sustained run of confirmed-zero known months gets carried
+    # forward into the unknown tail — see apply_discontinuation_signal.
+    base_methods = ("seasonal", "trend", "flat3", "flat6", "median6", "combo",
+                    "tier2_attach_rate", "tier2_category_average", "known_plan",
+                    "tier2_known_plan")
+    suffixes = ("+known_plan", "+discontinuing")
+    def is_valid_method(m):
+        changed = True
+        while changed:
+            changed = False
+            for suf in suffixes:
+                if m.endswith(suf):
+                    m = m[: -len(suf)]
+                    changed = True
+        return m in base_methods
+    assert all(is_valid_method(r.method) for r in rows)
 
     # every item's months are exactly start..start+horizon−1
     start = date.fromisoformat(note["start_month"])
@@ -81,8 +97,21 @@ def test_stored_forecast_equals_independent_recomputation(session):
     by_item = {}
     for r in rows:
         by_item.setdefault(r.item_id, []).append(r)
-    largest = sorted(by_item, key=lambda i: -sum(r.baseline or 0
-                                                 for r in by_item[i]))[:5]
+    # restrict to items the SKU engine (baseline.make_forecast) actually
+    # forecasted — identified by method, NOT by `in series`: an item can
+    # have history (be in `series`) yet still be skipped by the SKU
+    # engine's own is_stale gate and picked up by tier2 instead, which
+    # uses a different (bidirectional) recency check — see
+    # tier2_forecasting._has_current_activity. Such an item is real, stale-
+    # to-the-SKU-engine data that would make baseline.make_forecast return
+    # None on recompute, not a reproducibility bug.
+    tier2_methods = {"tier2_attach_rate", "tier2_category_average", "tier2_known_plan"}
+    def is_sku_engine_row(m):
+        return m not in tier2_methods and not m.startswith("tier2_attach_rate+")
+    sku_engine_items = [iid for iid, rows in by_item.items()
+                       if iid in series and is_sku_engine_row(rows[0].method)]
+    largest = sorted(sku_engine_items, key=lambda i: -sum(r.baseline or 0
+                                                          for r in by_item[i]))[:5]
     for item_id in largest:
         expected, method = baseline.make_forecast(series[item_id], start,
                                                   note["horizon"])

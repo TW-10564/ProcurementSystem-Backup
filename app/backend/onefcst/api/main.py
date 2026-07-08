@@ -196,6 +196,17 @@ def list_forecasts(q: str = "", category: str | None = None, method: str | None 
                                          limit=limit, offset=offset)
 
 
+@app.get("/forecasts/order-suggestions")
+def get_order_suggestions(session: Session = Depends(db)):
+    """Detail behind the dashboard's "orders needed" count — every item
+    that needs a purchase order, with stock/quantity/timing so a buyer can
+    assess real need, not just see a number. Must be registered BEFORE
+    /forecasts/{item_id} or FastAPI tries to parse "order-suggestions" as
+    an item_id and 422s."""
+    from .. import forecast_views
+    return forecast_views.order_suggestions(session)
+
+
 @app.get("/forecasts/{item_id}")
 def forecast_detail(item_id: int, session: Session = Depends(db)):
     from .. import forecast_views
@@ -228,6 +239,15 @@ def _cached(key: str, compute):
 def get_mismatch_report(session: Session = Depends(db)):
     from ..verify.mismatch import compute_mismatch
     return _cached("mismatch", lambda: compute_mismatch(session))
+
+
+@app.get("/reports/source-reconciliation")
+def get_source_reconciliation(session: Session = Depends(db)):
+    """Master vs sub-file (one_row) disagreement for near-term item-months
+    — flags, does not resolve (see verify/reconciliation.py). A listed item
+    isn't necessarily wrong in master; it needs a human look."""
+    from ..verify.reconciliation import run as run_reconciliation
+    return _cached("source-reconciliation", lambda: run_reconciliation(session))
 
 
 @app.get("/reports/backtest")
