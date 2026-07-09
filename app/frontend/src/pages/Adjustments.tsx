@@ -34,8 +34,16 @@ export default function Adjustments() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const load = () => api.adjustments().then(setList);
+  const load = () =>
+    api
+      .adjustments()
+      .then((rows) => {
+        setList(rows);
+        setError(null);
+      })
+      .catch((e) => setError(String(e.message ?? e)));
   useEffect(() => {
     load();
   }, []);
@@ -43,7 +51,7 @@ export default function Adjustments() {
   useEffect(() => {
     if (query.length < 1) return setOptions([]);
     const timer = setTimeout(() => {
-      api.searchItems(query).then(setOptions);
+      api.searchItems(query).then(setOptions).catch((e) => setError(String(e.message ?? e)));
     }, 200);
     return () => clearTimeout(timer);
   }, [query]);
@@ -90,8 +98,11 @@ export default function Adjustments() {
         <p>{t("adj_sub")}</p>
       </div>
 
-      <div className="grid-13">
-        {/* ── left: new-adjustment form ─────────────────────────────── */}
+      {error && <div className="banner warn">⚠️ {error}</div>}
+
+      <div className="stack-full">
+        {/* ── new-adjustment form — full width, so long values (item
+             search, reason text) are never squeezed into a half column ── */}
         <div className="card stripe-card brand">
           <div className="hd">
             <div>
@@ -254,7 +265,7 @@ export default function Adjustments() {
             </div>
           </div>
           {list.length === 0 ? (
-            <div className="empty">{t("common_none_recorded")}</div>
+            <div className="empty">{error ? t("common_load_failed") : t("common_none_recorded")}</div>
           ) : (
             <div>
               {list.map((a) => {

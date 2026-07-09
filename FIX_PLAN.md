@@ -2,6 +2,8 @@
 
 *Written 2026-07-07. Two audit passes complete (file:line evidence gathered for all items below); fixes not yet implemented. Security/auth/RBAC is explicitly out of scope per user instruction — this covers only core forecasting/procurement correctness.*
 
+**STATUS UPDATE 2026-07-09 (independent council re-audit):** C1-C5 and H1-H2 are now **FIXED and covered by regression tests** (verified by reading the current code, not by assuming prior intent — see the ✅ marker on each item below); H3 was already fixed earlier (commit `bf9feb8`, before this doc was written, so its "not yet implemented" framing was already stale on arrival). One regression was found and fixed during the same pass: `onefcst/verify/order_suggestions.py` (the M5 plausibility-check script, added in commit `d423189` after C2/C4 were fixed elsewhere) independently reproduced both bugs in its own `_future_demand()` — it read PlanValue via `func.avg` and never applied adjustments. Now fixed to reuse the same latest-snapshot-wins + adjustment-overlay logic as `forecast_views.order_suggestions()`. Full detail in the "Council Review — 2026-07-09" section near the end of this file. M1-M4 below remain open (unchanged since 2026-07-07).
+
 ## Context
 
 The core system's foundations are verified strong — Gate A 97.9% data resolution, Gate B 100% cell-level parity against the real Excel, Gate C shows the seasonal method beats naive baselines at the category level (10.95% vs 13.6-16.3% WAPE). A first review pass found 4 weak points (per-SKU accuracy, a Tier-2 forecasting bug, stock coverage, and a missing name bridge). A second, broader sweep across the remaining core modules (stock projection, mismatch detection, adjustments, FVA scoring, the item registry, exports, and DB schema) found **5 more issues — three of them serious, silently-wrong-output bugs, not edge cases.** This document lists everything found, ordered by severity, plus the separate Data Summary cross-check task.
@@ -10,31 +12,31 @@ The core system's foundations are verified strong — Gate A 97.9% data resoluti
 
 ## SEVERITY: CRITICAL — silently wrong numbers/decisions, no crash to alert anyone
 
-### C1. FVA (Forecast Value Added) scores every human adjustment as "hurt" — the metric is backwards
+### ✅ FIXED — C1. FVA (Forecast Value Added) scores every human adjustment as "hurt" — the metric is backwards
 
 `onefcst/verify/fva.py:31-38` (`score_fva`) compares the adjustment's outcome against a "baseline" that is read from `PlanValue` at `level="master"` for that month. But per this codebase's own rule (`planner_accuracy.py:159-162`), once a month closes (`adj.month < today`, the exact filter at `fva.py:24`), the master cell has already been **overwritten with the actual**. So `baseline == actual`, `baseline_wape ≈ 0`, and any adjustment that isn't a perfect guess scores worse than "doing nothing" — verdict is always `adjustment_hurt`. **This means the FVA dashboard (one of the app's headline accuracy claims — Accuracy.tsx's FVA card) has been systematically wrong since it was built: it can never show a human adjustment helping, even when it did.**
 
 **Fix:** `score_fva` must compare against the ORIGINAL statistical forecast that was overridden — either `Adjustment.old_value` (already captured at adjustment time, just unused) or the matching `Forecast.baseline` row for that item/month/run — never the current master cell.
 
-### C2. Global and category-scope adjustments are silently accepted and then never applied anywhere
+### ✅ FIXED — C2. Global and category-scope adjustments are silently accepted and then never applied anywhere
 
 `onefcst/forecast_views.py:77` (`_latest_adjustments`) filters `Adjustment.scope == "sku"` only, and it's the only consumer of adjustments across every read path (`summary`, `list_forecasts`, `item_detail`, and by extension the FVA scoring above). `record_adjustment` happily accepts and stores `scope="global"` or `scope="category"` (`advisory/adjustments.py:22-23`) — the Adjustments UI form even has a dropdown for it — but nothing downstream ever reads a non-"sku" adjustment. **A planner can record a category-wide correction, see "Saved", and it changes zero forecast numbers anywhere in the system, with no error and no indication.**
 
 **Fix:** `_latest_adjustments` (or a new resolver) must expand global/category adjustments to every item they should affect, the same way `scope="sku"` is applied today.
 
-### C3. Item name resolution is non-deterministic — the same alias can silently resolve to a different item between runs
+### ✅ FIXED — C3. Item name resolution is non-deterministic — the same alias can silently resolve to a different item between runs
 
 `onefcst/registry/build.py:175` (`resolve()`) does `ItemAlias.alias == name` with **no `order_by`**, so when the same alias string is claimed by two items from two different source systems, which one wins is arbitrary DB storage order — not tracked as a conflict at all, because the collision counter (`_add_alias`, lines 22-33) only catches same-alias-same-source_system collisions (matching the DB's own unique constraint, `models.py:57`: `(alias, source_system)`, which permits cross-system duplicates by design). **This can silently misattribute an entire item's plan/stock/actuals data to the WRONG item, and which item "wins" can change between rebuilds of the same data — i.e. rerunning `python3 -m onefcst.build` twice on identical input could produce two different forecasts for the affected items.**
 
 **Fix:** Either (a) add deterministic tie-breaking to `resolve()` (e.g. prefer a fixed source-system priority order, or the most-recently-updated alias), or (b) widen the conflict detection to catch and report cross-system alias collisions too, so they route to human review like other conflicts already do (per `build.py`'s `alias_conflicts` reporting), rather than resolving silently either way.
 
-### C4. `PlanValue` re-ingestion averages stale and corrected values together instead of using the latest snapshot
+### ✅ FIXED — C4. `PlanValue` re-ingestion averages stale and corrected values together instead of using the latest snapshot
 
 `onefcst/forecasting.py:37-41` (`_series_by_item`) uses `func.avg(PlanValue.value)` grouped by `(item_id, month)` to build each SKU's history. There is no unique constraint on `PlanValue(item_id, month, level)` (`models.py`), so when a source file is re-ingested with a corrected number for a month already ingested under an earlier snapshot, the forecast input **blends the old (wrong) and new (corrected) value via averaging** instead of using only the latest snapshot — the opposite of what `_stock_by_item` correctly does for `StockState` (latest-snapshot-wins). `forecast_views.py:232` (`item_detail`'s displayed history) has the identical issue.
 
 **Fix:** Change `_series_by_item` and the `item_detail` history query to select the value from the most recent `snapshot_id`/`Snapshot.file_mtime` per `(item_id, month, level)`, not an average across all ingested snapshots.
 
-### C5. No unique constraint on `Forecast(run_id, item_id, month)` — a future code path could silently double-count
+### ✅ FIXED — C5. No unique constraint on `Forecast(run_id, item_id, month)` — a future code path could silently double-count
 
 `onefcst/models.py:123-131` — `Forecast` has no DB-level uniqueness guard. Today's `generate()` avoids duplicates only via an in-memory `already_forecasted` set (`forecasting.py`), so it's not currently triggered, but any future write path (a retry, a partial re-run, a bug in a new caller) could insert a second row for the same (run, item, month) and silently double `next12_total` and any downstream order suggestion, with no error raised anywhere.
 
@@ -44,19 +46,19 @@ The core system's foundations are verified strong — Gate A 97.9% data resoluti
 
 ## SEVERITY: HIGH — crashes / misleading test results on realistic data
 
-### H1. Mismatch gate crashes (`TypeError`) on a NULL master value in the anchor month
+### ✅ FIXED — H1. Mismatch gate crashes (`TypeError`) on a NULL master value in the anchor month
 
 `onefcst/verify/mismatch.py` — `compute_mismatch`'s `demand()` helper returns `v[0]` unguarded (used at lines ~75, 81, 87) and is `+`-accumulated into `cpu_by_socket`/`mb_by_socket` totals; if any classified CPU/MB item has a NULL value in the anchor month, this raises `TypeError` and **aborts the entire Mismatch Detection tab**, not just that one item. The identical case is already correctly guarded elsewhere in the same file (`historical_scan`, lines ~149/153, uses `(val or 0)`) — the anchor-month path was simply missed.
 
 **Fix:** Apply the same `(val or 0)` guard in `compute_mismatch`'s demand accumulation.
 
-### H2. The mismatch module's own "acceptance test" can only crash, never actually fail — and its PASS is unconditional
+### ✅ FIXED — H2. The mismatch module's own "acceptance test" can only crash, never actually fail — and its PASS is unconditional
 
 `onefcst/verify/mismatch.py:201-207` (`run`) prints `PASS` with no assertion of any pass condition, and will raise `IndexError`/`ValueError` (empty `hist`/`persistent` sequences) rather than ever printing a genuine FAIL. **This means the historical-validation "PASS" shown for the AM4 mismatch finding (39 months of 200-360% divergence, already surfaced to procurement) has no actual test behind it** — it would say PASS even if the underlying pattern silently stopped being true, and would crash rather than correctly report FAIL if the data shape changed.
 
 **Fix:** Rewrite as a real assertion (e.g. persistent-months count and gap-% range checked against explicit thresholds, raising a clear failure message) instead of an unconditional print.
 
-### H3. `stock_projection.py:48` — `TypeError` when average monthly demand is both omitted and contains a `None` entry
+### ✅ FIXED (already, before this doc was written) — H3. `stock_projection.py:48` — `TypeError` when average monthly demand is both omitted and contains a `None` entry
 
 The average-demand calculation doesn't apply the same `d or 0.0` guard that `project_stock` uses one line away (line 23), so a `None` in `monthly_demand` crashes the average instead of being treated as zero, unlike the rest of the function.
 
@@ -153,3 +155,27 @@ Critical items first — they're silently producing wrong output right now, with
 - [ ] Manually verify C1's fix: find/create a closed-month adjustment that clearly helped, confirm FVA now shows "adjustment_helped" instead of always "hurt"
 - [ ] Run the Data Summary comparison script; review diff table before concluding anything
 - [ ] Restart both servers and spot-check Forecast/Mismatch/CompatReview/Accuracy tabs after the DB rebuild
+
+---
+
+## Council Review — 2026-07-09
+
+Independent re-audit (multi-agent review, each finding re-verified against actual current code before being trusted). Findings and fixes:
+
+**C1-C5, H1-H2: confirmed fixed in current code**, several with dedicated regression tests already in `app/backend/tests/` (`test_fva.py`, `test_adjustment_scope_expansion.py`, `test_registry_resolve.py`, `test_plan_value_latest_snapshot.py`, `test_mismatch.py`). `python3 -m pytest tests/ -q` was 161/0 passing before this session's changes, 166/0 after. This document's earlier claim that C1-C4/H1-H2 had "none currently covered" test coverage was itself stale — the fixes and their tests both already existed.
+
+**New issues found and fixed this session:**
+
+1. **`onefcst/verify/order_suggestions.py` reproduced C2 and C4 independently.** This M5 plausibility-check script (added in commit `d423189`, alongside the `order-suggestions` API feature) has its own `_future_demand()` that queried `PlanValue` with `func.avg(...)` grouped by month (the exact C4 bug) and never applied adjustments at all (the exact C2 bug) — the fix commit for the main `forecast_views.order_suggestions()` path never touched this file. **Fixed**: `_future_demand()` now does latest-snapshot-wins (same pattern as `forecasting._level_series`), and `generate_for_item()` now overlays adjustments via `forecast_views._latest_adjustments`/`_apply_adjustments` before calling `suggest_order`.
+2. **No test exercised MOQ/lead-time/safety-stock end to end.** Every `Item` fixture in `test_order_suggestions_view.py` left `moq`/`lead_time_days`/`min_stock_days` at their default `None`, so the MOQ ceil-rounding, lead-time order-by shift, and safety-stock buffer math were never exercised through the actual view output a buyer sees (only indirectly, via engine-level tests with less realistic scenarios). **Fixed**: added `test_stock_projection.py::test_moq_rounds_suggested_qty_up_to_a_multiple`, `test_lead_time_shifts_order_by_month_earlier_than_breach`, `test_min_stock_days_raises_safety_stock_and_breaches_earlier`, plus a view-level `test_order_suggestions_view.py::test_order_by_precedes_breach_month_when_lead_time_is_set`.
+3. **C5's unique constraint had no regression test.** Added `test_order_suggestions_view.py::test_duplicate_forecast_for_same_run_item_month_violates_unique_constraint`, asserting the DB actually raises `IntegrityError` on a duplicate `(run_id, item_id, month)` insert.
+4. **Root `CLAUDE.md` was badly stale** — it described the frozen `consolidation/` Excel-automation POC as the current Phase-1 product ("No forecasting"), while the actual active codebase is `app/backend/onefcst` (this forecasting engine) + `app/frontend`. Neither was mentioned anywhere in the doc. **Fixed**: `CLAUDE.md` rewritten to describe both, with `app/` as the active product and `consolidation/` explicitly marked frozen/reference-only.
+5. **Several frontend pages had no error handling** — `Mismatch.tsx`, `Accuracy.tsx`, `Adjustments.tsx`, `CompatReview.tsx` had fetches with no `.catch`/no `r.ok` check, so a backend failure (e.g. a recurrence of H1, or any 5xx) left the page stuck on an indefinite "loading" state indistinguishable from genuinely-empty data, or (for `Accuracy.tsx`'s two raw `fetch()` calls) risked rendering a FastAPI error-JSON body as if it were valid report data. **Fixed**: added `error` state + `.catch` to all four pages' data fetches, a warning banner, and an explicit "failed to load" empty-state (`common_load_failed` i18n key) distinct from "loading" and "genuinely empty."
+
+**Still open (not addressed this session, no code changed):**
+
+- M1-M4 (per-SKU WAPE, Tier-2 staleness partial fix already landed per M2's own diagnosis, stock coverage, ①販売計画 name resolution) — structural/accuracy items, unchanged since 2026-07-07.
+- No incoming-PO/in-transit quantity modeled in `engine/stock_projection.py` — order suggestions assume zero incoming supply; flagged as a data-modeling gap, not fixed.
+- `api/auth.py`'s API-key check uses `!=` instead of `hmac.compare_digest` (minor timing side-channel); `api/main.py`'s CORS is `allow_origins=["*"]` with only a comment warning it's dev-only; neither hardened this session (explicitly out of scope per this doc's original security/auth exclusion).
+- `scheduler.py` has no run-locking — a background poll and a manual `POST /forecasts/run` can call `generate()` concurrently on process restart with zero coordination (worse under `--workers N`). Not fixed this session.
+- Forecast.tsx never renders `ForecastDetail.stock.snapshot_date`, so staleness of the displayed stock figure isn't visible to users. Not fixed this session.

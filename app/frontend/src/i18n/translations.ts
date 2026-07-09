@@ -18,6 +18,7 @@ export const translations = {
   nav_notifications: { ja: "通知・変更履歴", en: "Notifications & Audit Log" },
 
   common_loading: { ja: "読み込み中…", en: "Loading…" },
+  common_load_failed: { ja: "読み込みに失敗しました", en: "Failed to load" },
   common_download_excel: { ja: "Excel出力", en: "Export to Excel" },
   common_none_recorded: { ja: "記録はまだありません", en: "Nothing recorded yet" },
   common_author_label: { ja: "担当者名", en: "Author name" },

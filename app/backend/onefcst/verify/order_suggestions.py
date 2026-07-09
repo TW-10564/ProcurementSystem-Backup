@@ -18,12 +18,11 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from sqlalchemy import func
-
 from ..db import get_session
-from ..models import Item, PlanValue, StockState
+from ..models import Item, PlanValue, Snapshot, StockState
 from ..engine.stock_projection import suggest_order
 from ..registry.build import resolve
+from ..forecast_views import _apply_adjustments, _latest_adjustments
 
 _CONSOLIDATION = Path(__file__).resolve().parents[4] / "consolidation"
 if str(_CONSOLIDATION) not in sys.path:
@@ -32,21 +31,45 @@ import purchasing as legacy_purchasing        # noqa: E402
 
 
 def _future_demand(session, item_id: int, months: int = 4) -> list[float]:
+    """{month index -> demand}, latest-snapshot-wins per (item, month) —
+    same FIX_PLAN C4 rule as forecasting._level_series. This module used to
+    group by month with func.avg(PlanValue.value), which blends a stale and
+    a corrected snapshot together on re-ingest instead of using only the
+    latest one; kept in sync with forecast_views/forecasting manually since
+    this is a separate read path (see CLAUDE.md constraint #4)."""
     today = date.today().replace(day=1)
-    rows = (session.query(PlanValue.month, func.avg(PlanValue.value))
+    rows = (session.query(PlanValue.month, PlanValue.value,
+                          PlanValue.snapshot_id, Snapshot.file_mtime)
+           .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
            .filter(PlanValue.item_id == item_id, PlanValue.level == "master",
-                   PlanValue.month >= today)
-           .group_by(PlanValue.month).order_by(PlanValue.month).limit(months).all())
-    return [v or 0.0 for _, v in rows] or [0.0] * months
+                   PlanValue.month >= today, PlanValue.value.isnot(None))
+           .order_by(PlanValue.month, Snapshot.file_mtime.asc(),
+                    PlanValue.snapshot_id.asc())
+           .all())
+    by_month: dict[date, float] = {}
+    for month, value, _snapshot_id, _file_mtime in rows:
+        if isinstance(month, str):
+            month = date.fromisoformat(month)
+        by_month[month] = float(value)     # later (latest) overwrites
+    ordered_months = sorted(by_month)[:months]
+    demand = [by_month[m] for m in ordered_months]
+    return demand + [0.0] * (months - len(demand))
 
 
-def generate_for_item(session, item: Item) -> dict | None:
+def generate_for_item(session, item: Item, adjustments=None) -> dict | None:
     stock = (session.query(StockState).filter(StockState.item_id == item.id)
             .order_by(StockState.snapshot_date.desc()).first())
     if stock is None or (stock.one_balance is None and stock.sap_qty is None):
         return None
     current_balance = stock.sap_qty if stock.sap_qty is not None else stock.one_balance
-    demand = _future_demand(session, item.id)
+    today = date.today().replace(day=1)
+    months = 4
+    month_dates = [date(today.year + (today.month - 1 + i) // 12,
+                        (today.month - 1 + i) % 12 + 1, 1) for i in range(months)]
+    demand = _future_demand(session, item.id, months)
+    if adjustments is None:
+        adjustments = _latest_adjustments(session)
+    demand, _ = _apply_adjustments(item.id, month_dates, demand, adjustments)
     if sum(demand) == 0:
         return None
     result = suggest_order(current_balance=current_balance, monthly_demand=demand,
@@ -69,12 +92,13 @@ def run_plausibility_check(days_back: int = 90, limit: int = 15) -> dict:
     print(f"[data] {len(pos)} total PO rows read from 17 files' 購買計画; "
          f"{len(recent_pos)} distinct SKUs ordered in the last {days_back} days")
 
+    adjustments = _latest_adjustments(session)
     comparisons = []
     for sku, plist in recent_pos.items():
         item = resolve(session, sku)
         if item is None:
             continue
-        sugg = generate_for_item(session, item)
+        sugg = generate_for_item(session, item, adjustments)
         if sugg is None or sugg["action"] != "suggest_order":
             continue
         actual_qty = sum(p["qty"] for p in plist)
@@ -103,7 +127,8 @@ def run_plausibility_check(days_back: int = 90, limit: int = 15) -> dict:
 
     # sample suggestions across categories, for demo purposes
     sample_items = session.query(Item).filter(Item.moq.isnot(None)).limit(300).all()
-    all_suggestions = [s for i in sample_items if (s := generate_for_item(session, i))]
+    all_suggestions = [s for i in sample_items
+                      if (s := generate_for_item(session, i, adjustments))]
     n_suggest = sum(1 for s in all_suggestions if s["action"] == "suggest_order")
     print(f"\n[coverage] {n_suggest}/{len(all_suggestions)} sampled items with stock+"
          "demand data currently need a suggested order")

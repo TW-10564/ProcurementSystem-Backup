@@ -38,19 +38,27 @@ export default function CompatReview() {
     confirmed: 0,
     rejected: 0,
   });
+  const [error, setError] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
     api
       .compatRules({ status: status || undefined, min_confidence: undefined })
-      .then(setRules)
+      .then((r) => {
+        setRules(r);
+        setError(null);
+      })
+      .catch((e) => setError(String(e.message ?? e)))
       .finally(() => setLoading(false));
     // counts across all statuses for the summary strip / segmented control
-    api.compatRules({}).then((all) => {
-      const c: Record<Status, number> = { draft: 0, confirmed: 0, rejected: 0 };
-      for (const r of all) c[r.status] = (c[r.status] ?? 0) + 1;
-      setCounts(c);
-    });
+    api
+      .compatRules({})
+      .then((all) => {
+        const c: Record<Status, number> = { draft: 0, confirmed: 0, rejected: 0 };
+        for (const r of all) c[r.status] = (c[r.status] ?? 0) + 1;
+        setCounts(c);
+      })
+      .catch((e) => setError(String(e.message ?? e)));
   };
 
   useEffect(load, [status]);
@@ -131,6 +139,8 @@ export default function CompatReview() {
           {t("compat_sub_pre")} <b>{t("compat_sub_bold")}</b> {t("compat_sub_post")}
         </p>
       </div>
+
+      {error && <div className="banner warn">⚠️ {error}</div>}
 
       <div className="banner info">ℹ️ {t("compat_banner")}</div>
 
@@ -261,7 +271,7 @@ export default function CompatReview() {
         {loading ? (
           <div className="empty">{t("common_loading")}</div>
         ) : shown.length === 0 ? (
-          <div className="empty">{t("compat_none")}</div>
+          <div className="empty">{error ? t("common_load_failed") : t("compat_none")}</div>
         ) : (
           <div>
             {shown.map((r) => {

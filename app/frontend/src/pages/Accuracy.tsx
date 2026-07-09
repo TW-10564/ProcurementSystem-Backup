@@ -45,12 +45,19 @@ export default function Accuracy() {
   const [fva, setFva] = useState<FvaReport | null>(null);
   const [rate, setRate] = useState<AdjustmentRate | null>(null);
   const [planner, setPlanner] = useState<PlannerAccuracy | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.backtestReport().then(setReport);
-    fetch(downloadUrl("/reports/fva")).then((r) => r.json()).then(setFva);
-    fetch(downloadUrl("/reports/adjustment-rate")).then((r) => r.json()).then(setRate);
-    api.plannerAccuracy().then(setPlanner);
+    const fetchJson = (url: string) =>
+      fetch(downloadUrl(url)).then((r) => {
+        if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+        return r.json();
+      });
+    const onError = (e: unknown) => setError(String((e as Error).message ?? e));
+    api.backtestReport().then(setReport).catch(onError);
+    fetchJson("/reports/fva").then(setFva).catch(onError);
+    fetchJson("/reports/adjustment-rate").then(setRate).catch(onError);
+    api.plannerAccuracy().then(setPlanner).catch(onError);
   }, []);
 
   const maxWape = report
@@ -71,6 +78,8 @@ export default function Accuracy() {
 
   return (
     <div>
+      {error && <div className="banner warn">⚠️ {error}</div>}
+
       {/* ── hero band ─────────────────────────────────────────── */}
       <div className="hero">
         <h2>{t("accuracy_title")}</h2>
@@ -103,7 +112,7 @@ export default function Accuracy() {
 
       {!planner ? (
         <div className="card">
-          <div className="empty">{t("common_loading")}</div>
+          <div className="empty">{error ? t("common_load_failed") : t("common_loading")}</div>
         </div>
       ) : (
         <>
@@ -409,7 +418,7 @@ export default function Accuracy() {
         </div>
         <div style={{ padding: "18px 24px" }}>
           {!fva ? (
-            <div className="empty">{t("common_loading")}</div>
+            <div className="empty">{error ? t("common_load_failed") : t("common_loading")}</div>
           ) : fva.scoreable_count === 0 ? (
             <div className="banner info">
               ℹ️ {fva.note ?? t("fva_no_scoreable")}
@@ -464,7 +473,7 @@ export default function Accuracy() {
 
       {/* ── backtest: method benchmark ────────────────────────── */}
       {!report ? (
-        <div className="empty">{t("common_loading")}</div>
+        <div className="empty">{error ? t("common_load_failed") : t("common_loading")}</div>
       ) : (
         <>
           <div className="card">

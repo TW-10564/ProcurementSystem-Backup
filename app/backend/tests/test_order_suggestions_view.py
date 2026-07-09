@@ -6,6 +6,7 @@ from datetime import date
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from onefcst.models import Base, Item, ForecastRun, Forecast, StockState
@@ -96,3 +97,47 @@ def test_empty_when_no_run_exists(session):
     result = order_suggestions(session)
     assert result == {"run": None, "total": 0, "rows": [], "by_category": [],
                       "by_month": [], "negative_stock_count": 0, "total_qty": 0}
+
+
+def test_order_by_precedes_breach_month_when_lead_time_is_set(session):
+    """MOQ/lead-time/safety-stock were previously never set on any Item
+    fixture here, so the lead-time shift (order_by vs breach_month),
+    safety-stock buffer, and MOQ rounding were never exercised end to end
+    through the actual view/row output a buyer sees."""
+    item = Item(canonical_name="Lead Time Part", category="CPU", kind="part",
+               moq=25.0, lead_time_days=60.0, min_stock_days=30.0)
+    session.add(item)
+    session.flush()
+    session.add(StockState(item_id=item.id, sap_qty=200.0))
+    run = _seed_run(session)
+    for i in range(6):
+        session.add(Forecast(run_id=run.id, item_id=item.id,
+                             month=date(2026, 7 + i, 1), baseline=50.0, method="flat3"))
+    session.commit()
+
+    result = order_suggestions(session)
+    assert result["total"] == 1
+    row = result["rows"][0]
+    assert row["order_by"] < row["breach_month"]
+    assert row["safety_stock"] > 0
+    assert row["order_qty"] % 25 == 0
+
+
+def test_duplicate_forecast_for_same_run_item_month_violates_unique_constraint(session):
+    """FIX_PLAN C5 — Forecast has a UniqueConstraint(run_id, item_id, month)
+    to guard against a future write path silently double-counting
+    next12_total/order suggestions; this locks in that the constraint is
+    actually enforced at the DB level, not just present in models.py."""
+    item = Item(canonical_name="Dup Check", category="CPU", kind="part")
+    session.add(item)
+    session.flush()
+    run = _seed_run(session)
+    month = date(2026, 7, 1)
+    session.add(Forecast(run_id=run.id, item_id=item.id, month=month,
+                         baseline=100.0, method="flat3"))
+    session.commit()
+
+    session.add(Forecast(run_id=run.id, item_id=item.id, month=month,
+                         baseline=200.0, method="flat3"))
+    with pytest.raises(IntegrityError):
+        session.commit()

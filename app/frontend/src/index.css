@@ -95,6 +95,15 @@ body {
 }
 
 /* ── shell ──────────────────────────────────────────────────────────── */
+/* A permanent slim icon rail (no expand-on-hover drawer — that read as a
+   popup and got in the way). Each icon shows its name as a floating
+   tooltip label the moment you hover it, so the destination is legible
+   before you commit to the click, without the rail itself ever moving or
+   reflowing the page. */
+
+:root {
+  --rail-w: 68px;
+}
 
 .app-shell {
   display: flex;
@@ -102,18 +111,25 @@ body {
 }
 
 .sidebar {
-  width: 240px;
+  width: var(--rail-w);
   flex-shrink: 0;
   background: var(--card);
   border-right: 1px solid var(--line);
-  padding: 20px 14px 24px;
+  padding: 16px 0 20px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  position: sticky;
+  align-items: center;
+  position: fixed;
   top: 0;
+  left: 0;
   height: 100vh;
-  overflow-y: auto;
+  /* deliberately NOT overflow:auto — an auto/scroll container clips in
+     BOTH axes per spec, which would cut off the tooltips below. The nav
+     list is short enough (7 items) to fit every real viewport without
+     needing to scroll. */
+  overflow: visible;
+  z-index: 40;
+  box-shadow: var(--shadow);
 }
 
 /* three-wave brand stripe across the very top of the sidebar */
@@ -127,47 +143,56 @@ body {
   background: var(--wave-stripe);
 }
 
-.brand {
+.brand-mark {
+  flex-shrink: 0;
+  margin-bottom: 18px;
+}
+.brand-mark .badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--brand-500), var(--brand));
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.78rem;
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(30, 33, 136, 0.3);
+}
+
+.nav-scroll {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 10px 18px;
-  border-bottom: 1px solid var(--line2);
-  margin-bottom: 10px;
-}
-
-.brand .logo-img {
+  align-items: center;
+  gap: 4px;
   width: 100%;
-  max-width: 168px;
-  height: auto;
-  display: block;
 }
 
-.brand h1 {
-  font-size: 0.9rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  color: var(--brand);
-}
-
-.brand p {
-  font-size: 0.71rem;
-  color: var(--muted);
-  font-weight: 500;
+.nav-group + .nav-group {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line2);
 }
 
 .nav-link {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-radius: 8px;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: 1px 0;
+  border-radius: 11px;
   color: var(--muted);
-  font-weight: 600;
-  font-size: 0.85rem;
   text-decoration: none;
   transition: background 0.13s, color 0.13s;
+}
+
+.nav-icon {
+  font-size: 1.2rem;
+  line-height: 1;
 }
 
 .nav-link:hover {
@@ -184,12 +209,47 @@ body {
 .nav-link.active::before {
   content: "";
   position: absolute;
-  left: 0;
-  top: 7px;
-  bottom: 7px;
+  left: -12px;
+  top: 6px;
+  bottom: 6px;
   width: 3px;
   border-radius: 999px;
   background: var(--brand);
+}
+
+/* the name, shown before the icon takes you there — a floating tooltip
+   that appears instantly on hover/focus, never affects layout */
+.nav-tooltip {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  background: var(--ink);
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 6px 11px;
+  border-radius: 7px;
+  box-shadow: var(--shadow-lift);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 45;
+}
+.nav-tooltip::before {
+  content: "";
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 5px solid transparent;
+  border-right-color: var(--ink);
+}
+.nav-link:hover .nav-tooltip,
+.nav-link:focus-visible .nav-tooltip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
 }
 
 .lang-toggle {
@@ -198,7 +258,17 @@ body {
   border-radius: 8px;
   padding: 2px;
   gap: 2px;
-  margin: 2px 10px 12px;
+}
+
+.lang-toggle-float {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  z-index: 50;
+  background: var(--card);
+  box-shadow: var(--shadow-lift);
+  border: 1px solid var(--line);
+  padding: 3px;
 }
 
 .lang-toggle button {
@@ -208,7 +278,7 @@ body {
   font: inherit;
   font-weight: 700;
   font-size: 0.73rem;
-  padding: 5px 0;
+  padding: 5px 10px;
   flex: 1;
   border-radius: 6px;
   cursor: pointer;
@@ -221,19 +291,14 @@ body {
   box-shadow: 0 1px 3px rgba(30, 33, 136, 0.35);
 }
 
-.nav-section {
-  font-size: 0.66rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--faint);
-  text-transform: uppercase;
-  padding: 16px 12px 5px;
-}
-
+/* full-bleed content — this is a data dashboard (tables, KPI grids), not an
+   article, so it fills the available width instead of capping into a
+   narrow centered column that leaves the rest of a wide screen empty. */
 .main {
   flex: 1;
-  padding: 32px 42px 64px;
-  max-width: 1220px;
+  min-width: 0;
+  margin-left: var(--rail-w);
+  padding: 68px clamp(20px, 3vw, 48px) 64px;
   animation: page-in 0.25s ease-out;
 }
 
@@ -252,6 +317,13 @@ body {
   .main {
     animation: none;
   }
+}
+
+@media (max-width: 720px) {
+  :root { --rail-w: 56px; }
+  .nav-link { width: 38px; height: 38px; }
+  .main { padding: 64px 16px 40px; }
+  .lang-toggle-float { top: 10px; right: 12px; }
 }
 
 /* ── page head ──────────────────────────────────────────────────────── */
@@ -551,6 +623,8 @@ textarea {
 .field textarea,
 .main input[type="text"],
 .main input:not([type]) {
+  width: 100%;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px 12px;
@@ -572,13 +646,18 @@ textarea {
 
 .formgrid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 16px;
   padding: 18px 24px;
 }
 
 .formgrid .span2 {
   grid-column: span 2;
+}
+
+@media (max-width: 560px) {
+  .formgrid { grid-template-columns: 1fr; }
+  .formgrid .span2 { grid-column: span 1; }
 }
 
 /* ── banners ────────────────────────────────────────────────────────── */
@@ -687,6 +766,10 @@ textarea {
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; align-items: start; }
 .grid-13 { display: grid; grid-template-columns: 1fr 2.2fr; gap: 18px; align-items: start; }
 @media (max-width: 1100px) { .grid2, .grid3, .grid-13 { grid-template-columns: 1fr; } }
+
+/* full-width stacked sections — used where each block (e.g. a form) needs
+   the whole page width rather than being squeezed into a grid column */
+.stack-full { display: grid; gap: 18px; }
 
 /* toolbar row (filters/search/actions above tables) */
 .toolbar {

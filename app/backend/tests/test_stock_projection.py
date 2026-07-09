@@ -23,3 +23,46 @@ def test_suggest_order_average_matches_explicit_zero_substitution():
                               moq=None, lead_time_days=0, min_stock_days=30)
     assert with_none["action"] == with_zero["action"] == "suggest_order"
     assert with_none["safety_stock"] == with_zero["safety_stock"]
+
+
+def test_moq_rounds_suggested_qty_up_to_a_multiple():
+    """moq=25 on a shortfall that isn't already a multiple of 25 must round
+    UP (never down — an order short of the real need defeats the point)."""
+    no_moq = suggest_order(current_balance=100.0, monthly_demand=[100.0] * 3,
+                           moq=None, lead_time_days=0, min_stock_days=0)
+    with_moq = suggest_order(current_balance=100.0, monthly_demand=[100.0] * 3,
+                             moq=25, lead_time_days=0, min_stock_days=0)
+    assert with_moq["action"] == "suggest_order"
+    assert with_moq["moq_applied"] is True
+    assert with_moq["suggested_qty"] % 25 == 0
+    assert with_moq["suggested_qty"] >= no_moq["suggested_qty"]
+
+
+def test_lead_time_shifts_order_by_month_earlier_than_breach():
+    """order_by_month_index must land BEFORE breach_month_index by roughly
+    lead_time_days worth of months, so the order arrives before the
+    breach — not merely get placed on the breach date."""
+    no_lead = suggest_order(current_balance=100.0, monthly_demand=[50.0] * 6,
+                            moq=None, lead_time_days=0, min_stock_days=0)
+    with_lead = suggest_order(current_balance=100.0, monthly_demand=[50.0] * 6,
+                              moq=None, lead_time_days=60, min_stock_days=0)
+    assert no_lead["action"] == with_lead["action"] == "suggest_order"
+    assert no_lead["order_by_month_index"] == no_lead["breach_month_index"]
+    assert with_lead["breach_month_index"] == no_lead["breach_month_index"]
+    assert with_lead["order_by_month_index"] < with_lead["breach_month_index"]
+
+
+def test_min_stock_days_raises_safety_stock_and_breaches_earlier():
+    """min_stock_days>0 must produce a nonzero safety_stock buffer and
+    therefore breach at the same month or earlier than min_stock_days=0 —
+    otherwise the safety-stock buffer math (stock_projection.py:50) is
+    silently a no-op."""
+    no_buffer = suggest_order(current_balance=200.0, monthly_demand=[50.0] * 6,
+                              moq=None, lead_time_days=0, min_stock_days=0)
+    with_buffer = suggest_order(current_balance=200.0, monthly_demand=[50.0] * 6,
+                                moq=None, lead_time_days=0, min_stock_days=60)
+    assert with_buffer["safety_stock"] > 0
+    assert no_buffer["safety_stock"] == 0
+    assert with_buffer["action"] == "suggest_order"
+    if no_buffer["action"] == "suggest_order":
+        assert with_buffer["breach_month_index"] <= no_buffer["breach_month_index"]

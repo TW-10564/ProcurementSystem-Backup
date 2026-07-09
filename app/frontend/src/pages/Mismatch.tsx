@@ -20,9 +20,10 @@ export default function Mismatch() {
   const { t, lang } = useLang();
   const [report, setReport] = useState<MismatchReport | null>(null);
   const [sevFilter, setSevFilter] = useState<SevFilter>("ALL");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.mismatchReport().then(setReport);
+    api.mismatchReport().then(setReport).catch((e) => setError(String(e.message ?? e)));
   }, []);
 
   const groups = report?.groups ?? [];
@@ -56,6 +57,8 @@ export default function Mismatch() {
         <h2>{t("mismatch_title")}</h2>
         <p>{t("mismatch_sub")}</p>
       </div>
+
+      {error && <div className="banner warn">⚠️ {error}</div>}
 
       <div className="banner info">ℹ️ {t("mismatch_banner")}</div>
 
@@ -142,7 +145,7 @@ export default function Mismatch() {
         </div>
 
         {!report ? (
-          <div className="empty">{t("common_loading")}</div>
+          <div className="empty">{error ? t("common_load_failed") : t("common_loading")}</div>
         ) : visible.length === 0 ? (
           <div className="empty">
             {lang === "ja" ? "該当するグループはありません" : "No groups match this filter"}

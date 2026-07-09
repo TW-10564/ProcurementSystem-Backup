@@ -42,40 +42,38 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <img className="logo-img" src="/twave-logo.png" alt="THIRDWAVE" />
-          <div>
-            <h1>{t("brand_name")}</h1>
-            <p>{t("brand_sub")}</p>
-          </div>
+      <div className="lang-toggle lang-toggle-float">
+        <button className={lang === "ja" ? "on" : ""} onClick={() => setLang("ja")}>
+          日本語
+        </button>
+        <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>
+          EN
+        </button>
+      </div>
+
+      <aside className="sidebar" tabIndex={-1}>
+        <div className="brand-mark" title={t("brand_name")}>
+          <span className="badge">TW</span>
         </div>
-        <div className="lang-toggle">
-          <button className={lang === "ja" ? "on" : ""} onClick={() => setLang("ja")}>
-            日本語
-          </button>
-          <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>
-            EN
-          </button>
-        </div>
-        {NAV.map((group) => (
-          <div key={group.sectionKey}>
-            <div className="nav-section">{t(group.sectionKey)}</div>
-            {group.items.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === "/"}
-                className={({ isActive }) =>
-                  "nav-link" + (isActive ? " active" : "")
-                }
-              >
-                <span>{item.icon}</span>
-                {t(item.labelKey)}
-              </NavLink>
-            ))}
-          </div>
-        ))}
+        <nav className="nav-scroll">
+          {NAV.map((group) => (
+            <div className="nav-group" key={group.sectionKey}>
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === "/"}
+                  className={({ isActive }) =>
+                    "nav-link" + (isActive ? " active" : "")
+                  }
+                >
+                  <span className="nav-icon">{item.icon}</span>
+                  <span className="nav-tooltip">{t(item.labelKey)}</span>
+                </NavLink>
+              ))}
+            </div>
+          ))}
+        </nav>
       </aside>
       <main className="main">
         <Outlet />
