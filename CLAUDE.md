@@ -27,8 +27,10 @@ cd app/backend && python3 -m uvicorn onefcst.api.main:app --host 0.0.0.0 --port 
 # Frontend (React + Vite)
 cd app/frontend && npm run dev -- --host 0.0.0.0 --port 5173
 
-# Rebuild DB from NAS sources (only if source files changed; ~4 min, full drop+rebuild)
-cd app/backend && python3 -m onefcst.build
+# Rebuild DB from NAS sources (only if source files changed; ~4 min, full drop+rebuild).
+# Once real human data exists (Adjustments/CompatRules/audit log), use the
+# preserving wrapper instead of bare `onefcst.build` — see CRITICAL constraint #2.
+cd app/backend && python3 -m onefcst.rebuild_preserving   # or: python3 -m onefcst.build (POC/no data to lose)
 
 # Generate a forecast run after a DB rebuild
 cd app/backend && python3 -m onefcst.forecasting   # or POST /forecasts/run
@@ -105,7 +107,9 @@ app/
 fva,planner-accuracy,adjustment-rate}`, `/export/{mismatch,compat-rules,adjustments,
 backtest,forecasts,audit-log}`. Auth is a shared `X-API-Key` header, app-level
 dependency in `main.py`; disabled (open) unless `ONEFCST_API_KEY` is set — do not
-deploy this off localhost without setting it and tightening the wildcard CORS config.
+deploy this off localhost without setting it. CORS defaults to localhost-only
+(`config.CORS_ORIGINS`, no more wildcard) — set `ONEFCST_CORS_ORIGINS` to the
+real deployed dashboard origin(s) before hosting anywhere else.
 
 **Two-tier forecast architecture**: planning dept (経営企画部) plans only
 VGA/CPU/MB/Case — the demand-driving categories (`engine/baseline.py` +
@@ -219,7 +223,11 @@ and `app/backend/onefcst/ingestion/name_crosswalk.py`.
    is a separate code path from `forecast_views.order_suggestions()`** — a fix
    to demand-calculation, snapshot-selection, or adjustment-application logic
    in one does NOT automatically apply to the other. Check both when touching
-   order-suggestion correctness.
+   order-suggestion correctness. Confirmed 2026-07-14 the divergence is wider
+   than just data source: `_future_demand()` sums raw `PlanValue` rows over
+   only 4 months, while `forecast_views.order_suggestions()` consumes the
+   full 12-month `make_forecast` pipeline output — a horizon mismatch, not
+   just a recomputation difference.
 
 5. **No incoming-PO / in-transit quantity is modeled** in
    `engine/stock_projection.py` — order suggestions assume zero incoming
@@ -231,9 +239,12 @@ and `app/backend/onefcst/ingestion/name_crosswalk.py`.
 ## Dependencies
 
 `app/backend`: `fastapi uvicorn sqlalchemy openpyxl pyxlsb pydantic` (see
-`app/backend/requirements.txt`). `app/frontend`: React + TS + Vite (see
-`app/frontend/package.json`). `consolidation/` (frozen POC): `fastapi uvicorn
-openpyxl pyxlsb python-docx`.
+`app/backend/requirements.txt`), plus the system package `mdbtools` (`sudo
+apt-get install -y mdbtools`) for reading the live SAP stock source
+(`SAP在庫抽出.accdb`, an Access DB — see `ingestion/sap.py`); soft
+dependency, falls back to an xlsx snapshot if unavailable. `app/frontend`:
+React + TS + Vite (see `app/frontend/package.json`). `consolidation/`
+(frozen POC): `fastapi uvicorn openpyxl pyxlsb python-docx`.
 
 ---
 

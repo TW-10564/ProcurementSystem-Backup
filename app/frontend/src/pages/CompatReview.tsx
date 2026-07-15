@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, downloadUrl } from "../api/client";
+import { api, downloadReport } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 import type { CompatRule } from "../api/types";
 
@@ -31,6 +31,8 @@ export default function CompatReview() {
   const [loading, setLoading] = useState(false);
   const [author, setAuthor] = useAuthor();
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState({ relation: "", confidence: "", note: "" });
   const [llmBusy, setLlmBusy] = useState(false);
   const [llmMsg, setLlmMsg] = useState<string | null>(null);
   const [counts, setCounts] = useState<Record<Status, number>>({
@@ -82,6 +84,39 @@ export default function CompatReview() {
     try {
       await api.rejectRule(id, author, reason);
       load();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const startEdit = (r: CompatRule) => {
+    setEditingId(r.id);
+    setEditForm({ relation: r.relation, confidence: String(r.confidence), note: "" });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditForm({ relation: "", confidence: "", note: "" });
+  };
+
+  const saveEdit = async (id: number) => {
+    if (!author) return alert(t("compat_bulk_confirm_alert"));
+    const confidence = editForm.confidence.trim() === "" ? undefined : Number(editForm.confidence);
+    if (confidence !== undefined && (Number.isNaN(confidence) || confidence < 0 || confidence > 1)) {
+      alert(lang === "ja" ? "信頼度は0〜1の数値で入力してください" : "Confidence must be a number between 0 and 1");
+      return;
+    }
+    setBusyId(id);
+    try {
+      await api.editRule(id, author, {
+        relation: editForm.relation.trim() || undefined,
+        confidence,
+        note: editForm.note.trim() || undefined,
+      });
+      setEditingId(null);
+      load();
+    } catch (e: unknown) {
+      alert(String((e as Error).message ?? e));
     } finally {
       setBusyId(null);
     }
@@ -207,9 +242,12 @@ export default function CompatReview() {
                 </button>
               </>
             )}
-            <a className="btn" href={downloadUrl(`/export/compat-rules?status=${status}`)}>
+            <button
+              className="btn"
+              onClick={() => downloadReport(`/export/compat-rules?status=${status}`, "compat-rules.xlsx")}
+            >
               {t("common_download_excel")}
-            </a>
+            </button>
           </div>
         </div>
 
@@ -276,8 +314,9 @@ export default function CompatReview() {
           <div>
             {shown.map((r) => {
               const tone = confTone(r.confidence);
+              const isEditing = editingId === r.id;
               return (
-                <div className="list-row" key={r.id}>
+                <div className="list-row" key={r.id} style={{ flexWrap: isEditing ? "wrap" : undefined }}>
                   <div className={`icon-tile ${tone}`}>🔗</div>
                   <div className="grow">
                     <div className="ttl">
@@ -287,55 +326,59 @@ export default function CompatReview() {
                       </span>
                       {r.part_b_name}
                     </div>
-                    <div className="meta">
-                      {r.relation}
-                      <span style={{ margin: "0 6px" }}>·</span>
-                      {t("compat_th_origin")}: {r.origin}
-                      {r.confirmed_by && (
-                        <>
-                          <span style={{ margin: "0 6px" }}>·</span>
-                          {t("compat_th_confirmed_by")}: {r.confirmed_by}
-                        </>
-                      )}
-                      {r.note && (
-                        <>
-                          <span style={{ margin: "0 6px" }}>·</span>
-                          <span title={r.note} style={{ fontStyle: "italic" }}>
-                            {r.note.length > 90 ? r.note.slice(0, 90) + "…" : r.note}
-                          </span>
-                        </>
-                      )}
-                    </div>
+                    {!isEditing && (
+                      <div className="meta">
+                        {r.relation}
+                        <span style={{ margin: "0 6px" }}>·</span>
+                        {t("compat_th_origin")}: {r.origin}
+                        {r.confirmed_by && (
+                          <>
+                            <span style={{ margin: "0 6px" }}>·</span>
+                            {t("compat_th_confirmed_by")}: {r.confirmed_by}
+                          </>
+                        )}
+                        {r.note && (
+                          <>
+                            <span style={{ margin: "0 6px" }}>·</span>
+                            <span title={r.note} style={{ fontStyle: "italic" }}>
+                              {r.note.length > 90 ? r.note.slice(0, 90) + "…" : r.note}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
 
-                  <div style={{ textAlign: "right", flexShrink: 0, width: 110 }}>
-                    <div className="eyebrow">{t("compat_th_confidence")}</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 7, justifyContent: "flex-end", marginTop: 3 }}>
-                      <span
-                        className="minibar dim-track"
-                        style={{ width: 56, position: "relative" }}
-                      >
+                  {!isEditing && (
+                    <div style={{ textAlign: "right", flexShrink: 0, width: 110 }}>
+                      <div className="eyebrow">{t("compat_th_confidence")}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, justifyContent: "flex-end", marginTop: 3 }}>
                         <span
-                          className="minibar"
-                          style={{
-                            position: "absolute",
-                            left: 0,
-                            top: 0,
-                            width: `${Math.round(r.confidence * 100)}%`,
-                          }}
-                        />
-                      </span>
-                      <span className="mono" style={{ fontSize: "0.78rem", fontWeight: 700 }}>
-                        {r.confidence.toFixed(2)}
-                      </span>
+                          className="minibar dim-track"
+                          style={{ width: 56, position: "relative" }}
+                        >
+                          <span
+                            className="minibar"
+                            style={{
+                              position: "absolute",
+                              left: 0,
+                              top: 0,
+                              width: `${Math.round(r.confidence * 100)}%`,
+                            }}
+                          />
+                        </span>
+                        <span className="mono" style={{ fontSize: "0.78rem", fontWeight: 700 }}>
+                          {r.confidence.toFixed(2)}
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <span className={`pill p-${r.status}`} style={{ flexShrink: 0 }}>
                     {r.status}
                   </span>
 
-                  {status === "draft" && (
+                  {status === "draft" && !isEditing && (
                     <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                       <button
                         className="btn primary"
@@ -345,12 +388,81 @@ export default function CompatReview() {
                         {t("compat_btn_confirm")}
                       </button>
                       <button
+                        className="btn"
+                        disabled={busyId === r.id}
+                        onClick={() => startEdit(r)}
+                      >
+                        {t("compat_btn_edit")}
+                      </button>
+                      <button
                         className="btn danger"
                         disabled={busyId === r.id}
                         onClick={() => reject(r.id)}
                       >
                         {t("compat_btn_reject")}
                       </button>
+                    </div>
+                  )}
+
+                  {isEditing && (
+                    <div
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 12,
+                        alignItems: "flex-end",
+                        padding: "10px 0 4px",
+                        borderTop: "1px solid var(--line2)",
+                        marginTop: 8,
+                      }}
+                    >
+                      {r.note && (
+                        <div style={{ width: "100%", fontSize: "0.78rem", color: "var(--muted)" }}>
+                          <span className="eyebrow">{t("compat_edit_original_ai")}</span>{" "}
+                          <span style={{ fontStyle: "italic" }}>{r.note}</span>
+                        </div>
+                      )}
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <span className="eyebrow">{t("compat_edit_relation")}</span>
+                        <input
+                          value={editForm.relation}
+                          onChange={(e) => setEditForm({ ...editForm, relation: e.target.value })}
+                          style={{ width: 120 }}
+                        />
+                      </label>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <span className="eyebrow">{t("compat_edit_confidence")}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={editForm.confidence}
+                          onChange={(e) => setEditForm({ ...editForm, confidence: e.target.value })}
+                          style={{ width: 90 }}
+                        />
+                      </label>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 240px" }}>
+                        <span className="eyebrow">{t("compat_edit_note")}</span>
+                        <input
+                          value={editForm.note}
+                          onChange={(e) => setEditForm({ ...editForm, note: e.target.value })}
+                          placeholder={t("compat_edit_note_placeholder")}
+                        />
+                      </label>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          className="btn primary"
+                          disabled={busyId === r.id}
+                          onClick={() => saveEdit(r.id)}
+                        >
+                          {t("compat_edit_save")}
+                        </button>
+                        <button className="btn" onClick={cancelEdit}>
+                          {t("compat_edit_cancel")}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

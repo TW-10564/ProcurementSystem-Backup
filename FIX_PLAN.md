@@ -104,14 +104,20 @@ The average-demand calculation doesn't apply the same `d or 0.0` guard that `pro
 - Reuse the existing `norm()` normalization already proven in `consolidation/stock_paste.py` (fullwidth→halfwidth, case-fold, strip spaces/hyphens) in `name_crosswalk.py`/`resolve()` before matching blank-`あだ名` SAP rows — should recover a meaningful fraction of the remaining 327 unmatched rows.
 - Report plainly to the team: full Tier-2 stock coverage needs a **new inventory data source** for accessory/consumable parts — a data-sourcing ask for purchasing/IT, not further engineering.
 
-### M4. ①販売計画 37% name resolution
+### M4. ①販売計画 name resolution — ✅ PARTIALLY FIXED 2026-07-14 (68.1% → 85.8% row resolution)
 
 **Diagnosis — structural data gap, not a bug:**
-`planning1.py` correctly extracts finished-PRODUCT model names, but no model-name↔綽名 (BOM/attach) bridge exists anywhere in the source data — `engine/tier2.py`'s own docstring confirms the ONE計画.xlsm's intended `製品マスター`/`製品計画` sheets don't exist in the live workbook.
+`planning1.py` correctly extracts finished-PRODUCT model names, but no model-name↔綽名 (BOM/attach) bridge exists anywhere in the source data — `engine/tier2.py`'s own docstring confirms the ONE計画.xlsm's intended `製品マスター`/`製品計画` sheets don't exist in the live workbook. (An earlier pass already landed the ASR-prefix-strip/RTX-prefix-strip/GB→G rules in `candidate_variants()`, raising resolution from the original 37% to 68.1% before this update — this doc's title was stale.)
 
-**Fix (mitigation, not a full solve):**
-- Add a heuristic fuzzy matcher for ① model names → 綽名, modeled on `consolidation/stock_paste.py`'s existing SYONAME substring/keyword matcher — will raise resolution for models with recognizable CPU/GPU codes embedded, but won't reach full coverage.
-- Flag to the team: fully closing this needs either a real `製品マスター`/BOM table from planning, or extending NotePC's partial model→綽名 bridge to desktop models.
+**Fixed 2026-07-14:** added the AMD Ryzen naming-convention rule to `planning1.candidate_variants()` — ①writes `"R{tier}-{model}"` (e.g. "R5-3400G", "R9-9950X3D2"), 綽名 is `"ry{tier}{model}"` (e.g. "ry53400G", "ry99950X3D2"). This was **23 of the 44** names still unresolved (over half), verified exact against the live registry for every case but one (`R9-9950X` — genuinely not registered under any 綽名, only its X3D/X3D2 variants are; correctly left unresolved rather than guessed). Row-level resolution: 375 unresolved rows → 167.
+
+**Still open (needs a human, not more code):** ~22 distinct names remain unresolved, three genuinely different shapes:
+- **Inconsistent MB vendor-prefix/word-order conventions** (`ASUS Z890ProArt` vs registry's `ProArt Z890`; `MSI Z890` vs registry's plain `Z890`; `ASUS B860M` — an EXACT match exists in the registry but isn't matching, worth a direct look) — too inconsistent for a safe regex rule; a wrong guess here would misattribute real demand.
+- **Case/chassis color-code rows** (`CruX　WH`, `Libra-B/W`, `SK-*/SKM-* V2`, `X3-B/W`) — structurally have no 綽名 counterpart at all, per the original diagnosis.
+- **Ambiguous/possibly-typo'd variants** (`RTX5060Ti 8GB` — registry only has 16G; `RTX4000BW-SFF` — registry only has the non-SFF `4000BW`) — could be a real unregistered SKU or a typo; not safe to auto-resolve either way.
+- One one-off promotional collab name (`ぶいすぽ`) with no systematic naming rule to apply.
+
+Fully closing this still needs either a real `製品マスター`/BOM table from planning, or extending NotePC's partial model→綽名 bridge to desktop models.
 
 ---
 
@@ -176,6 +182,6 @@ Independent re-audit (multi-agent review, each finding re-verified against actua
 
 - M1-M4 (per-SKU WAPE, Tier-2 staleness partial fix already landed per M2's own diagnosis, stock coverage, ①販売計画 name resolution) — structural/accuracy items, unchanged since 2026-07-07.
 - No incoming-PO/in-transit quantity modeled in `engine/stock_projection.py` — order suggestions assume zero incoming supply; flagged as a data-modeling gap, not fixed.
-- `api/auth.py`'s API-key check uses `!=` instead of `hmac.compare_digest` (minor timing side-channel); `api/main.py`'s CORS is `allow_origins=["*"]` with only a comment warning it's dev-only; neither hardened this session (explicitly out of scope per this doc's original security/auth exclusion).
+- `api/auth.py`'s API-key check already uses `hmac.compare_digest` (this doc was stale — fixed prior to 2026-07-14, not by this session). `api/main.py`'s CORS was `allow_origins=["*"]`; fixed 2026-07-14 — now `config.CORS_ORIGINS`, defaulting to localhost-only, configurable via `ONEFCST_CORS_ORIGINS` for real deployment.
 - `scheduler.py` has no run-locking — a background poll and a manual `POST /forecasts/run` can call `generate()` concurrently on process restart with zero coordination (worse under `--workers N`). Not fixed this session.
 - Forecast.tsx never renders `ForecastDetail.stock.snapshot_date`, so staleness of the displayed stock figure isn't visible to users. Not fixed this session.

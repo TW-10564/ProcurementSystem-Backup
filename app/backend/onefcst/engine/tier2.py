@@ -30,6 +30,8 @@ from __future__ import annotations
 import statistics
 from datetime import date
 
+from .baseline import wape
+
 MIN_OVERLAP_MONTHS = 3     # fewer than this and a ratio is noise, not a rate
 HOLDOUT_MONTHS = 6         # same window discipline as the SKU engine
 OUTLIER_MULTIPLE = 15      # a month more than this many times the trailing
@@ -149,13 +151,6 @@ def leave_one_out_wape(member_obs: dict[date, float], other_member_rates: list[f
     actual = [member_obs[m] or 0.0 for m in months]
     predicted = [rate * (tier1_series.get(m) or 0.0) for m in months]
     return wape(actual, predicted)
-
-
-def wape(actual: list[float], predicted: list[float]) -> float | None:
-    den = sum(abs(a) for a in actual)
-    if not den:
-        return None
-    return 100 * sum(abs(a - p) for a, p in zip(actual, predicted)) / den
 
 
 def holdout_eval(item_obs: dict[date, float], tier1_series: dict[date, float],

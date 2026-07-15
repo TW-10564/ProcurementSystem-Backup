@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import date
 
 from .config import TIER1_CATEGORIES
-from .models import AccuracyScore, Forecast, Item
+from .models import AccuracyScore, Actual, Forecast, Item, StockState
 from .engine import baseline
 from .engine import tier2 as tier2_engine
 
@@ -206,14 +206,31 @@ def generate_category_fallback(session, run, series: dict[int, dict[date, float]
             if w is not None:
                 loo_scores.append((w, sum(abs(v or 0) for v in obs.values())))
 
-    # zero-history items: no obs at all in `series`, category known, not
-    # already handled by any earlier stage
+    # zero-plan-history items: no obs at all in `series`, category known, not
+    # already handled by any earlier stage. But zero PlanValue history alone
+    # isn't enough to trust a borrowed category rate — confirmed 2026-07-14
+    # against real NAS/SAP data that 170/171 items this fallback forecasted
+    # in one run had ALSO never once appeared in StockState or Actual (i.e.
+    # absent from every live SAP stock snapshot, current AND backup, and
+    # never had a recorded sale) — bare registry entries with no sign of
+    # being active parts at all, not merely under-tracked live ones. Only
+    # items with at least one real stock or actual record ever get the
+    # borrowed-rate forecast; the rest are skipped (see
+    # items_skipped_no_real_signal) rather than fabricating demand for a
+    # part with no operational footprint whatsoever.
+    ids_with_stock = {r[0] for r in session.query(StockState.item_id).distinct()}
+    ids_with_actual = {r[0] for r in session.query(Actual.item_id).distinct()}
+
     forecasted = 0
     skipped_no_category_rate = 0
+    skipped_no_real_signal = 0
     for item_id, item in items.items():
         if item_id in already_handled or item_id in series:
             continue
         if item.category is None or item.category in TIER1_CATEGORIES:
+            continue
+        if item_id not in ids_with_stock and item_id not in ids_with_actual:
+            skipped_no_real_signal += 1
             continue
         rate = category_rates.get(item.category)
         if rate is None:
@@ -232,6 +249,7 @@ def generate_category_fallback(session, run, series: dict[int, dict[date, float]
 
     return {"items_forecasted": forecasted,
            "items_skipped_no_category_rate": skipped_no_category_rate,
+           "items_skipped_no_real_signal": skipped_no_real_signal,
            "categories_with_a_rate": len(category_rates),
            "leave_one_out_wape": loo_wape,
            "note": "leave_one_out_wape answers 'if a category member with real "

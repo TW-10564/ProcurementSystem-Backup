@@ -25,6 +25,7 @@ const NAV: { sectionKey: TranslationKey; items: NavItem[] }[] = [
     items: [
       { to: "/mismatch", labelKey: "nav_mismatch", icon: "⚠️" },
       { to: "/compat", labelKey: "nav_compat", icon: "🔗" },
+      { to: "/discontinuation", labelKey: "nav_discontinuation", icon: "🗑️" },
     ],
   },
   {

@@ -24,6 +24,13 @@ class Item(Base):
     lifecycle = Column(String)           # 新規/発売中/EOL在庫あり/完全終息/開発中止
     successor_id = Column(Integer, ForeignKey("items.id"))
     eol_flag = Column(Boolean, default=False)
+    # Purchasing's own "won't reorder" gray-cell marking in 部品詳細 (see
+    # ingestion/no_reorder_flag.py) — a human decision that can PRECEDE
+    # eol_flag, not a replacement for it. Only readable for the 6 category
+    # files stored as .xlsx (VGA/RTX/MEM/SSD/PSU/Mouse&KB); .xlsb categories
+    # (CPU/MB/etc — read via pyxlsb, which exposes no cell styling at all)
+    # always get False here regardless of their real status.
+    marked_no_reorder = Column(Boolean, default=False)
     # compatibility attributes (AI/spec-filled later)
     socket = Column(String)
     chipset = Column(String)
@@ -31,7 +38,16 @@ class Item(Base):
     form_factor = Column(String)
     # commercial attributes (部品マスター / 製品一覧)
     moq = Column(Float)
-    lead_time_days = Column(Float)
+    lead_time_days = Column(Float)          # 部品マスター's static estimate
+    # Real observed order->delivery lead time (median days, from completed
+    # 購買計画 PO history — see ingestion/lead_time.py). Found 2026-07-14:
+    # for many items this diverges sharply from lead_time_days above (e.g.
+    # a real SSD showing 112 real days vs master's static 7) — order timing
+    # should prefer this when there's enough real history to trust it (see
+    # forecast_views.effective_lead_time), not silently replace the master
+    # field, so both remain visible for a human to compare.
+    observed_lead_time_days = Column(Float)
+    observed_lead_time_samples = Column(Integer)
     min_stock_days = Column(Float)
     supplier_a = Column(String)
     supplier_b = Column(String)
@@ -96,6 +112,26 @@ class Actual(Base):
     qty = Column(Float)
     source = Column(String)              # ZP21 / ④全部合算 / ②CSV / SAP
     snapshot_id = Column(Integer, ForeignKey("snapshots.id"))
+    __table_args__ = (UniqueConstraint("item_id", "month", "source"),)
+
+
+class WeeklyActual(Base):
+    """Real per-item WEEKLY shipped quantity — the raw grain
+    ingestion/sap_shipments.py reads before aggregating into Actual's
+    monthly buckets. Kept as a separate table (not a finer-grained Actual)
+    because Actual's month grain is load-bearing elsewhere (FVA scoring,
+    forecast_views recency sort both key off calendar months matching
+    Forecast.month) — this table exists ONLY to feed the plan-vs-actual
+    weekly comparison view (forecast_views.plan_vs_actual), which
+    disaggregates the monthly Forecast the same way engine/weekly.py's
+    near-term UI view already does, then compares week-for-week."""
+    __tablename__ = "weekly_actuals"
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("items.id"), index=True)
+    week_start = Column(Date, nullable=False)
+    qty = Column(Float)
+    source = Column(String)
+    __table_args__ = (UniqueConstraint("item_id", "week_start", "source"),)
 
 
 class StockState(Base):

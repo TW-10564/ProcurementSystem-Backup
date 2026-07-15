@@ -18,6 +18,7 @@ import unicodedata
 from pathlib import Path
 
 from ..config import NAME_CROSSWALK_GLOB
+from .excel import read_xlsx_rows
 
 SHEET_NAME = "製品名称読みかえ"
 MIN_TOKEN_LEN = 4   # shorter tokens (e.g. "5070" inside "5070TI") false-match too easily
@@ -46,21 +47,17 @@ def load_crosswalk_tokens(path: Path) -> list[tuple[str, str]]:
     "B850 LiveMixer" does NOT resolve from an upper-cased "B850 LIVEMIXER".
     `normalized` exists only to make the SYONAME substring search
     case/width-insensitive; it is never used as the resolved name."""
-    import openpyxl
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    if SHEET_NAME not in wb.sheetnames:
-        wb.close()
+    rows = read_xlsx_rows(path, SHEET_NAME, max_col=2, required=False)
+    if rows is None:
         return []
-    ws = wb[SHEET_NAME]
     pairs = {}
-    for row in ws.iter_rows(min_row=2, max_col=2, values_only=True):
+    for row in rows[1:]:                              # row 0 is the header
         for v in row:
             if v in (None, ""):
                 continue
             n = _norm(v)
             if n:
                 pairs[n] = str(v).strip()          # last write wins; fine, values agree
-    wb.close()
     return sorted(pairs.items(), key=lambda kv: len(kv[0]), reverse=True)
 
 

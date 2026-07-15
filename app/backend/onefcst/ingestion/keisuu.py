@@ -4,11 +4,11 @@ NotePC's 参考資料(係数 通販+店舗　台数実績) (see notepc_seasonali
 Supplies two things, both sourced straight from ①'s own cells (no dependency
 on the deleted forecasting/poc_v0.py):
 
-  load_keisuu_history() — {期: [12 monthly PC-unit values, Aug..Jul]} for
+  parse_keisuu_history() — {期: [12 monthly PC-unit values, Aug..Jul]} for
   33期-42期, in the exact shape engine/seasonality.py's compute_seasonality
   and verify/backtest.py's walk-forward loop expect.
 
-  load_keisuu_reference() — the sheet's OWN cached formula results for its
+  parse_keisuu_reference() — the sheet's OWN cached formula results for its
   "過去5期(41-37)" block (平均/年間構成比/先月比/季節指数, rows 22-25) and its
   "42期着地予測" row (13). These are Excel's own last-computed values, not a
   script's snapshot — used by verify/parity.py (Gate B) as the ground truth
@@ -36,7 +36,7 @@ SHEET = "係数計算"
 KI_RE = re.compile(r"(\d+)期")
 
 
-def load_keisuu_history() -> dict[int, list]:
+def parse_keisuu_history() -> dict[int, list]:
     """→ {期number: [12 monthly unit values, Aug..Jul]} for 33期-42期."""
     path = planning_file("①")
     rows = read_xlsx_rows(path, SHEET, max_row=15, max_col=14)
@@ -52,7 +52,7 @@ def load_keisuu_history() -> dict[int, list]:
     return history
 
 
-def load_keisuu_reference() -> dict:
+def parse_keisuu_reference() -> dict:
     """→ the sheet's own cached 過去5期(41-37) seasonality figures and 42期
     着地予測, straight from Excel's last-computed cell values (Gate B ground
     truth)."""

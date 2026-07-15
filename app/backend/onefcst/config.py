@@ -31,6 +31,12 @@ ONE_DIR = Path(os.environ.get("ONE_SOURCE_DIR", _ROOT / "ONE" / "ONE"))
 PLANNING_DIR = Path(os.environ.get("PLANNING_DIR", _ROOT / "data" / "planning"))
 SAP_DIR = Path(os.environ.get("SAP_DIR", _ROOT / "data" / "sap"))
 SAP_STOCK_GLOB = os.environ.get("SAP_STOCK_GLOB", str(SAP_DIR / "*在庫.xlsx"))
+# The live weekly SAP stock extract (Access DB, refreshed by procurement each
+# week) — sits directly in ONE_DIR alongside ONE計画.xlsm. Primary source as
+# of 2026-07-14; SAP_STOCK_GLOB (a manually-placed xlsx snapshot) is now only
+# the fallback for when this file is unreachable. Requires the system
+# `mdbtools` package (mdb-export) — not a pip dependency, see requirements.txt.
+SAP_ACCDB_PATH = Path(os.environ.get("SAP_ACCDB_PATH", str(ONE_DIR / "SAP在庫抽出.accdb")))
 # Procurement team's own maintained name crosswalk (製品名称読みかえ sheet) —
 # used to resolve blank-あだ名 SAP rows. Optional: absence is expected and
 # non-blocking (see ingestion/sap.py). Chosen over a regex/heuristic matcher
@@ -41,6 +47,11 @@ NAME_CROSSWALK_GLOB = os.environ.get("NAME_CROSSWALK_GLOB",
 ONE_MASTER = ONE_DIR / "ONE計画.xlsm"
 NOTE_ONE_MASTER = ONE_DIR / "NoteONE計画.xlsm"
 NOTE_STOCK_PLAN = PLANNING_DIR / "ノート在庫使用計画_43期.xlsx"
+# Procurement's own category-level max-stock-days policy table (small,
+# human-maintained, filename date-suffixed — pick the latest by sort).
+# Fallback only: never overrides a per-item 部品マスター value, see
+# ingestion/stock_policy.py.
+STOCK_POLICY_GLOB = os.environ.get("STOCK_POLICY_GLOB", str(ONE_DIR / "在庫の持ち方*.xlsx"))
 
 
 def planning_file(prefix: str) -> Path:
@@ -98,3 +109,16 @@ LLM_TIMEOUT = float(os.environ.get("ONEFCST_LLM_TIMEOUT", "120"))
 # the dev default, so local work isn't blocked. Set ONEFCST_API_KEY to require
 # the same value in every request's X-API-Key header.
 API_KEY = os.environ.get("ONEFCST_API_KEY", "")
+
+# --- CORS -----------------------------------------------------------------
+# Comma-separated allowed origins for the SPA (see api/main.py's
+# CORSMiddleware). Defaults to localhost-only dev origins — FIX_PLAN item
+# "CORS wildcard" (previously allow_origins=["*"], flagged 2026-07-14 as
+# unsafe for any non-localhost deployment: a wildcard origin lets ANY
+# website's JS read this API's responses in a visitor's browser, not just
+# this app's own frontend). Set ONEFCST_CORS_ORIGINS to the real deployed
+# dashboard origin(s) before hosting this anywhere but localhost.
+CORS_ORIGINS = [o.strip() for o in os.environ.get(
+    "ONEFCST_CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173"
+).split(",") if o.strip()]

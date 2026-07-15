@@ -21,9 +21,6 @@ SHEETS = ["コンシューマー", "コマーシャル"]
 # match because of a few DOCUMENTED, VERIFIED naming-convention gaps
 # (checked against the live registry 2026-07-08), not because they're
 # unrelated names:
-#   - ASRock boards drop the vendor prefix in 綽名 ("ASR B550M" -> "B550M"),
-#     while MSI/ASUS/GIGABYTE boards KEEP theirs ("MSI H610M D5") — so only
-#     ASR/ASRock is stripped, never MSI/ASUS/GIGABYTE.
 #   - NVIDIA RTX cards drop "RTX" in 綽名 ("RTX5070Ti" -> "5070Ti"), but AMD
 #     Radeon cards KEEP "RX" ("RX9070XT" stays "RX9070XT") — only RTX is
 #     stripped.
@@ -31,9 +28,30 @@ SHEETS = ["コンシューマー", "コマーシャル"]
 # This is a bounded mitigation, not a full solve (per FIX_PLAN M4): case/
 # chassis color-code rows ("CruX　WH", "SF 白 コラボ") have no 綽名
 # counterpart at all — a structural gap, not a naming-convention one.
-_ASR_PREFIX_RE = re.compile(r"^ASR(?:ock)?\s+", re.IGNORECASE)
 _RTX_PREFIX_RE = re.compile(r"^RTX\s*", re.IGNORECASE)
 _GB_SUFFIX_RE = re.compile(r"(\d+)\s*GB\b", re.IGNORECASE)
+
+# MB vendor prefix (revised 2026-07-14): the ORIGINAL claim here — "ASRock
+# drops its prefix, MSI/ASUS/GIGABYTE keep theirs" — turned out to be wrong
+# on a wider check: 0 of 154 registered MB items keep an "ASUS" or
+# "GIGABYTE" prefix at all, and MSI itself is inconsistent (keeps it for
+# some boards, e.g. "MSI H610M D5", drops it for others, e.g. "Z890" is
+# registered bare despite ①'s row reading "MSI Z890"). No vendor reliably
+# keeps its prefix, so — same principle already applied to ASR — this tries
+# BOTH the raw name and the prefix-stripped form as candidates rather than
+# assuming either is always right for a given vendor.
+_MB_VENDOR_PREFIX_RE = re.compile(r"^(?:ASR(?:ock)?|MSI|ASUS|GIGABYTE)\s+",
+                                  re.IGNORECASE)
+
+# AMD Ryzen CPUs: ① writes "R{tier}-{model}" (e.g. "R5-3400G", "R9-9950X3D2"),
+# 綽名 is "ry{tier}{model}" (e.g. "ry53400G", "ry99950X3D2") — no hyphen, "R"
+# expanded to "ry". Added 2026-07-14 after finding this was 23 of the 44
+# names ①'s own resolution still missed (over half): verified exact against
+# the live registry for every currently-unresolved R-series row but one
+# (plain "R9-9950X" — no hyphen/tier issue, that model simply isn't
+# registered under any 綽名 at all, only its X3D/X3D2 variants are; left
+# unresolved rather than guessed at, same as any other genuinely-missing item).
+_RYZEN_RE = re.compile(r"^R(\d)-(\w+)$")
 
 
 def candidate_variants(raw_name: str) -> list[str]:
@@ -41,9 +59,9 @@ def candidate_variants(raw_name: str) -> list[str]:
     (closest to the original) first. Returns just [raw_name] when none of
     the known conventions apply."""
     variants = [raw_name]
-    no_asr = _ASR_PREFIX_RE.sub("", raw_name)
-    if no_asr != raw_name:
-        variants.append(no_asr)
+    no_vendor = _MB_VENDOR_PREFIX_RE.sub("", raw_name)
+    if no_vendor != raw_name:
+        variants.append(no_vendor)
     no_rtx = _RTX_PREFIX_RE.sub("", raw_name)
     if no_rtx != raw_name:
         variants.append(no_rtx)
@@ -53,6 +71,9 @@ def candidate_variants(raw_name: str) -> list[str]:
         no_rtx_gb = _RTX_PREFIX_RE.sub("", gb_to_g)
         if no_rtx_gb != gb_to_g:
             variants.append(no_rtx_gb)
+    ryzen = _RYZEN_RE.match(raw_name)
+    if ryzen:
+        variants.append(f"ry{ryzen.group(1)}{ryzen.group(2)}")
     return variants
 
 

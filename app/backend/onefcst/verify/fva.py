@@ -61,11 +61,16 @@ def scoreable_adjustments(session) -> list[dict]:
     return out
 
 
-def run() -> dict:
-    session = get_session()
-    total_adjustments = session.query(Adjustment).count()
-    scoreable = scoreable_adjustments(session)
-    session.close()
+def run(session=None) -> dict:
+    own_session = session is None
+    if own_session:
+        session = get_session()
+    try:
+        total_adjustments = session.query(Adjustment).count()
+        scoreable = scoreable_adjustments(session)
+    finally:
+        if own_session:
+            session.close()
     helped = sum(1 for s in scoreable if s["verdict"] == "adjustment_helped")
     hurt = sum(1 for s in scoreable if s["verdict"] == "adjustment_hurt")
     return {"total_adjustments_recorded": total_adjustments,

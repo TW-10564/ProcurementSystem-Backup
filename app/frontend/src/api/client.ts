@@ -3,6 +3,7 @@ import type {
   Adjustment,
   BacktestReport,
   CompatRule,
+  DiscontinuationReport,
   ForecastDetail,
   ForecastList,
   ForecastRunInfo,
@@ -12,6 +13,10 @@ import type {
   Notification,
   OrderSuggestions,
   PlannerAccuracy,
+  PlanVsActual,
+  RebuildHistoryEntry,
+  RebuildStatus,
+  StockReconciliationReport,
 } from "./types";
 
 // Read-only against every NAS source, by construction: this client only ever
@@ -41,6 +46,15 @@ export const api = {
   rejectRule: (id: number, author: string, reason: string) =>
     http
       .post<CompatRule>(`/compat-rules/${id}/reject`, { author, reason })
+      .then((r) => r.data),
+
+  editRule: (
+    id: number,
+    author: string,
+    changes: { relation?: string; confidence?: number; note?: string },
+  ) =>
+    http
+      .patch<CompatRule>(`/compat-rules/${id}`, { author, ...changes })
       .then((r) => r.data),
 
   bulkConfirm: (author: string, threshold: number) =>
@@ -98,8 +112,21 @@ export const api = {
   forecastDetail: (itemId: number) =>
     http.get<ForecastDetail>(`/forecasts/${itemId}`).then((r) => r.data),
 
+  planVsActual: (itemId: number) =>
+    http.get<PlanVsActual>(`/forecasts/${itemId}/plan-vs-actual`).then((r) => r.data),
+
   runForecast: () =>
     http.post<ForecastRunInfo>("/forecasts/run").then((r) => r.data),
+
+  triggerRebuild: () =>
+    http.post<{ status: string }>("/build/rebuild").then((r) => r.data),
+
+  rebuildStatus: () =>
+    http.get<RebuildStatus>("/build/rebuild/status").then((r) => r.data),
+
+  rebuildHistory: (limit = 20) =>
+    http.get<RebuildHistoryEntry[]>("/build/rebuild/history", { params: { limit } })
+      .then((r) => r.data),
 
   orderSuggestions: () =>
     http.get<OrderSuggestions>("/forecasts/order-suggestions").then((r) => r.data),
@@ -111,10 +138,35 @@ export const api = {
 
   plannerAccuracy: () =>
     http.get<PlannerAccuracy>("/reports/planner-accuracy").then((r) => r.data),
+
+  fvaReport: () => http.get("/reports/fva").then((r) => r.data),
+
+  adjustmentRate: () => http.get("/reports/adjustment-rate").then((r) => r.data),
+
+  discontinuationReport: () =>
+    http.get<DiscontinuationReport>("/reports/discontinuation-risk").then((r) => r.data),
+
+  stockReconciliation: () =>
+    http.get<StockReconciliationReport>("/reports/stock-reconciliation").then((r) => r.data),
 };
 
-export function downloadUrl(path: string): string {
-  return `${BASE_URL}${path}`;
+// Downloads must go through `http`, not a plain <a href> — the backend's
+// X-API-Key gate (onefcst/api/auth.py) rejects a request with no header,
+// and browser navigation never sends one. A raw <a href={downloadUrl(...)}>
+// silently 401s the instant ONEFCST_API_KEY is set, while the rest of the
+// app (which does go through `http`) keeps working — found 2026-07-09.
+export async function downloadReport(path: string, fallbackName: string): Promise<void> {
+  const res = await http.get<Blob>(path, { responseType: "blob" });
+  const disposition = res.headers["content-disposition"] as string | undefined;
+  const filename = disposition?.match(/filename="?([^";]+)"?/)?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(res.data);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export { BASE_URL };

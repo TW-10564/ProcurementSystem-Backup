@@ -8,14 +8,11 @@ finds adjustments old enough to score against a real actual.
 """
 from __future__ import annotations
 
+from .baseline import wape as _wape_core
+
 
 def _wape(actual: list[float], predicted: list[float]) -> float | None:
-    pairs = [(a, p) for a, p in zip(actual, predicted) if a is not None and p is not None]
-    if not pairs:
-        return None
-    num = sum(abs(a - p) for a, p in pairs)
-    den = sum(abs(a) for a, _ in pairs)
-    return round(100 * num / den, 2) if den else None
+    return _wape_core(actual, predicted, skip_none=True, round_to=2)
 
 
 def score_fva(baseline: list[float], adjusted: list[float], actual: list[float]) -> dict:

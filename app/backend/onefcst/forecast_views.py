@@ -21,11 +21,12 @@ supersedes it — recalculating never silently erases it.
 """
 from __future__ import annotations
 
+import bisect
 import json
-from datetime import date
+from datetime import date, timedelta
 
-from .models import (AccuracyScore, Adjustment, Forecast, ForecastRun, Item,
-                    PlanValue, Snapshot, StockState)
+from .models import (AccuracyScore, Actual, Adjustment, Forecast, ForecastRun,
+                    Item, PlanValue, Snapshot, StockState, WeeklyActual)
 from .engine.stock_projection import suggest_order
 from .engine.weekly import disaggregate_forecast
 
@@ -49,11 +50,114 @@ def _run_info(run: ForecastRun) -> dict:
     return info
 
 
+def _prefer_sap_row(prev: StockState | None, r: StockState) -> bool:
+    """True if `r` should replace `prev` as an item's "current" stock row.
+
+    Found 2026-07-14: ingestion writes TWO separate StockState rows per item
+    — one from ONE's own subfile 在庫残高, a forward-PROJECTED balance
+    always dated to "today" (the ingestion run date), and one from SAP's
+    physical count, dated to the SAP extract's own real refresh date (which
+    can be several days older, since it only refreshes weekly). Naively
+    picking "most recent snapshot_date" therefore preferred ONE's simulated
+    projection — which can already be negative for a fast-moving item well
+    before any REAL shortage — over the actual physical SAP count, on every
+    day except the rare one SAP happens to refresh same-day as the build.
+    Once a row with a real sap_qty has been seen for an item, a later
+    ONE-only row (sap_qty is None) must never displace it; a later row that
+    ALSO has sap_qty legitimately wins (it's a newer real count)."""
+    if prev is not None and prev.sap_qty is not None and r.sap_qty is None:
+        return False
+    return True
+
+
+def trusted_current_balance(stock: StockState | None) -> tuple[float | None, str]:
+    """The current stock balance to actually use for order-suggestion math
+    (and any other "how much do we have right now" question), plus a
+    confidence flag: "sap_verified" / "one_only_unverified" /
+    "one_only_negative_clamped" / "no_data".
+
+    Rule (confirmed by the user 2026-07-15): SAP's physical count is the
+    authoritative source of truth for real inventory; ONE is a downstream
+    system that gets updated FROM SAP, not the other way around. SAP always
+    wins when present — matches the existing tie-break in _prefer_sap_row.
+
+    When an item has no SAP coverage at all (confirmed live 2026-07-15: 84
+    of 583 items with any stock data, several of them Tier-1 CPU/MB SKUs),
+    one_balance is the only signal available. But one_balance is ONE's own
+    simulated running projection, not a physical count — CLAUDE.md's own
+    constraint #3 documents it can go NEGATIVE well before any real
+    shortage. A negative balance is physically impossible for real
+    inventory and must not be trusted literally: engine.stock_projection's
+    suggest_order() computes shortfall = target_level - projected[breach],
+    and a negative starting balance flows straight through project_stock()
+    into that shortfall — silently inflating the suggested order quantity
+    by however negative the fake balance was. Clamped to 0 here instead."""
+    if stock is None:
+        return None, "no_data"
+    if stock.sap_qty is not None:
+        return stock.sap_qty, "sap_verified"
+    if stock.one_balance is not None:
+        if stock.one_balance < 0:
+            return 0.0, "one_only_negative_clamped"
+        return stock.one_balance, "one_only_unverified"
+    return None, "no_data"
+
+
 def _stock_by_item(session) -> dict[int, StockState]:
-    """Latest stock state per item (one query, newest snapshot wins)."""
+    """Latest stock state per item — see _prefer_sap_row for why this isn't
+    simply "newest snapshot_date wins"."""
     rows = (session.query(StockState)
             .order_by(StockState.item_id, StockState.snapshot_date).all())
-    return {r.item_id: r for r in rows}          # later (newer) overwrites
+    by_item: dict[int, StockState] = {}
+    for r in rows:
+        if _prefer_sap_row(by_item.get(r.item_id), r):
+            by_item[r.item_id] = r
+    return by_item
+
+
+def _latest_stock_state(session, item_id: int) -> StockState | None:
+    """Single-item equivalent of _stock_by_item, for call sites that only
+    need one item's current stock (e.g. item_detail, verify/order_suggestions)."""
+    rows = (session.query(StockState).filter(StockState.item_id == item_id)
+           .order_by(StockState.snapshot_date).all())
+    latest: StockState | None = None
+    for r in rows:
+        if _prefer_sap_row(latest, r):
+            latest = r
+    return latest
+
+
+def _last_active_month_by_item(session, item_ids) -> dict[int, date]:
+    """Most recent PAST month each item genuinely sold, for the Forecast
+    page's "latest selling on top" default ordering. Prefers real `Actual`
+    demand (qty > 0); Tier-2 accessory parts often have no `Actual` rows at
+    all (they're derived, not independently sold/tracked), so those fall
+    back to their most recent nonzero `PlanValue` month. Both sides are
+    capped at the current month: `PlanValue` is a forward-looking plan, so
+    an uncapped max() would surface a FUTURE planned month as if the part
+    had just sold — the opposite of what "latest selling" means. Items with
+    no signal at or before today have no recency and sort last (see
+    list_forecasts)."""
+    from sqlalchemy import func
+
+    ids = list(item_ids)
+    if not ids:
+        return {}
+    today = date.today()
+    by_item: dict[int, date] = {
+        item_id: _as_date(m) for item_id, m in
+        session.query(Actual.item_id, func.max(Actual.month))
+        .filter(Actual.item_id.in_(ids), Actual.qty > 0, Actual.month <= today)
+        .group_by(Actual.item_id).all()
+    }
+    missing = [i for i in ids if i not in by_item]
+    if missing:
+        for item_id, m in (session.query(PlanValue.item_id, func.max(PlanValue.month))
+                           .filter(PlanValue.item_id.in_(missing), PlanValue.value > 0,
+                                  PlanValue.month <= today)
+                           .group_by(PlanValue.item_id).all()):
+            by_item[item_id] = _as_date(m)
+    return by_item
 
 
 def _forecast_rows(session, run_id: int) -> dict[int, list]:
@@ -151,16 +255,34 @@ def _apply_adjustments(item_id: int, months: list[date], baseline_qtys: list[flo
     return final, detail
 
 
+MIN_OBSERVED_LEAD_TIME_SAMPLES = 3
+
+
+def effective_lead_time(item: Item) -> float | None:
+    """Prefer real observed order->delivery history (median days, from
+    completed 購買計画 POs — see ingestion/lead_time.py) over 部品マスター's
+    static lead_time_days when there's enough of it to trust (found
+    2026-07-14: these can diverge sharply — an SSD's static value was 7
+    days, 6 real deliveries showed a median of 112). Falls back to the
+    static master value when observed history is thin or absent, never the
+    other way around — a single-digit sample count is too easily skewed by
+    one unusually fast or slow shipment to override a purpose-set estimate."""
+    if (item.observed_lead_time_samples or 0) >= MIN_OBSERVED_LEAD_TIME_SAMPLES:
+        return item.observed_lead_time_days
+    return item.lead_time_days
+
+
 def _suggestion(item: Item, stock: StockState | None, demand: list[float]) -> dict | None:
-    if stock is None or (stock.one_balance is None and stock.sap_qty is None):
+    balance, confidence = trusted_current_balance(stock)
+    if balance is None:
         return None
-    balance = stock.sap_qty if stock.sap_qty is not None else stock.one_balance
     if sum(demand) == 0:
         return None
     s = suggest_order(current_balance=balance, monthly_demand=demand,
-                      moq=item.moq, lead_time_days=item.lead_time_days,
+                      moq=item.moq, lead_time_days=effective_lead_time(item),
                       min_stock_days=item.min_stock_days)
     s["current_balance"] = balance
+    s["stock_confidence"] = confidence
     return s
 
 
@@ -261,12 +383,11 @@ def order_suggestions(session) -> dict:
         sugg = _suggestion(item, stock, qtys)
         if not sugg or sugg["action"] != "suggest_order":
             continue
-        balance = stock.sap_qty if stock and stock.sap_qty is not None else (
-            stock.one_balance if stock else None)
         rows.append({
             "item_id": item_id, "name": item.canonical_name, "category": item.category,
             "method": frows[0].method,
-            "stock": round(balance, 1) if balance is not None else None,
+            "stock": round(sugg["current_balance"], 1),
+            "stock_confidence": sugg["stock_confidence"],
             "safety_stock": sugg["safety_stock"],
             "order_qty": sugg["suggested_qty"],
             "order_by": months[sugg["order_by_month_index"]],
@@ -321,6 +442,7 @@ def list_forecasts(session, q: str = "", category: str | None = None,
     if category:
         item_q = item_q.filter(Item.category == category)
     items = item_q.all()
+    last_active = _last_active_month_by_item(session, (i.id for i in items))
 
     months: list[str] = []
     rows = []
@@ -343,10 +465,12 @@ def list_forecasts(session, q: str = "", category: str | None = None,
         acc = acc_scores.get(item.id)
         wape_m1 = acc.wape_m1 if acc and acc.wape_m1 is not None else None
         wape_full = acc.wape if acc and acc.wape is not None else None
+        last_active_month = last_active.get(item.id)
         rows.append({
             "item_id": item.id, "name": item.canonical_name,
             "category": item.category, "tier": item.tier,
             "method": frows[0].method,
+            "last_active_month": last_active_month.isoformat() if last_active_month else None,
             "wape": round(wape_m1 if wape_m1 is not None else wape_full, 1)
                     if (wape_m1 is not None or wape_full is not None) else None,
             "wape_full_horizon": round(wape_full, 1) if wape_full is not None else None,
@@ -358,9 +482,42 @@ def list_forecasts(session, q: str = "", category: str | None = None,
                        "order_by": months[sugg["order_by_month_index"]]}
                       if sugg and sugg["action"] == "suggest_order" else None),
         })
-    rows.sort(key=lambda r: -r["next12_total"])
+    # Default order: most-recently-selling parts first (see
+    # _last_active_month_by_item); items with no recency signal at all sort
+    # last, then by forecast volume as a tiebreaker within each recency date.
+    def _sort_key(r):
+        m = r["last_active_month"]
+        if m is None:
+            return (1, 0, -r["next12_total"])
+        return (0, -date.fromisoformat(m).toordinal(), -r["next12_total"])
+    rows.sort(key=_sort_key)
     return {"run": _run_info(run), "total": len(rows), "months": months,
             "rows": rows[offset:offset + limit]}
+
+
+def _add_months(d: date, n: int) -> date:
+    y = d.year + (d.month - 1 + n) // 12
+    m = (d.month - 1 + n) % 12 + 1
+    return date(y, m, 1)
+
+
+def _latest_plan_by_month(session, item_id: int, level: str) -> dict[date, float]:
+    """{month: value}, latest-snapshot-wins per FIX_PLAN C4 (a re-ingested
+    corrected month must not be averaged with the stale value it
+    replaced) — shared by item_detail's history and
+    plan_vs_actual's trailing-history weeks."""
+    rows = (session.query(PlanValue.month, PlanValue.value,
+                          PlanValue.snapshot_id, Snapshot.file_mtime)
+           .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
+           .filter(PlanValue.item_id == item_id, PlanValue.level == level,
+                   PlanValue.value.isnot(None))
+           .order_by(PlanValue.month, Snapshot.file_mtime.asc(),
+                    PlanValue.snapshot_id.asc())
+           .all())
+    out: dict[date, float] = {}
+    for m, v, _sid, _mtime in rows:
+        out[_as_date(m)] = v                  # later (latest) overwrites
+    return out
 
 
 def item_detail(session, item_id: int) -> dict | None:
@@ -388,25 +545,11 @@ def item_detail(session, item_id: int) -> dict | None:
     # FIX_PLAN C4: same latest-snapshot-wins fix as forecasting._series_by_item
     # — a re-ingested (corrected) month must not be averaged with the stale
     # value it replaced.
-    def _latest_by_month(level: str) -> dict[date, float]:
-        rows = (session.query(PlanValue.month, PlanValue.value,
-                              PlanValue.snapshot_id, Snapshot.file_mtime)
-               .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
-               .filter(PlanValue.item_id == item_id, PlanValue.level == level,
-                       PlanValue.value.isnot(None))
-               .order_by(PlanValue.month, Snapshot.file_mtime.asc(),
-                        PlanValue.snapshot_id.asc())
-               .all())
-        out: dict[date, float] = {}
-        for m, v, _sid, _mtime in rows:
-            out[_as_date(m)] = v                  # later (latest) overwrites
-        return out
-
     # Per-MONTH merge, master preferred (see forecasting._series_by_item for
     # why this can't be a whole-item "or": master coverage commonly STOPS
     # partway through an item's timeline rather than being all-or-nothing).
-    master_by_month = _latest_by_month("master")
-    one_row_by_month = _latest_by_month("one_row")
+    master_by_month = _latest_plan_by_month(session, item_id, "master")
+    one_row_by_month = _latest_plan_by_month(session, item_id, "one_row")
     latest_by_month = {**one_row_by_month, **master_by_month}
     plan_rows = sorted(latest_by_month.items())
     history = [{"month": m.isoformat(), "qty": round(v, 1)}
@@ -414,8 +557,7 @@ def item_detail(session, item_id: int) -> dict | None:
     one_plan = [{"month": m.isoformat(), "qty": round(v, 1)}
                 for m, v in plan_rows if m >= start][:len(forecast) or 12]
 
-    stock = (session.query(StockState).filter(StockState.item_id == item_id)
-             .order_by(StockState.snapshot_date.desc()).first())
+    stock = _latest_stock_state(session, item_id)
     sugg = _suggestion(item, stock, [f["qty"] or 0.0 for f in forecast])
     wape = None
     wape_full_horizon = None
@@ -438,11 +580,123 @@ def item_detail(session, item_id: int) -> dict | None:
                      "category": item.category, "tier": item.tier,
                      "lifecycle": item.lifecycle, "moq": item.moq,
                      "lead_time_days": item.lead_time_days,
+                     "observed_lead_time_days": item.observed_lead_time_days,
+                     "observed_lead_time_samples": item.observed_lead_time_samples,
+                     "effective_lead_time_days": effective_lead_time(item),
                      "min_stock_days": item.min_stock_days},
             "method": method, "wape": wape, "wape_full_horizon": wape_full_horizon,
             "history": history, "forecast": forecast, "one_plan": one_plan,
             "weekly": weekly,
             "stock": ({"one_balance": stock.one_balance, "sap_qty": stock.sap_qty,
+                       "confidence": trusted_current_balance(stock)[1],
                        "snapshot_date": _as_date(stock.snapshot_date).isoformat()
                        if stock.snapshot_date else None} if stock else None),
             "suggestion": sugg}
+
+
+def plan_vs_actual(session, item_id: int, history_months: int = 1) -> dict | None:
+    """System-planned quantity (this item's monthly Forecast, WITH any
+    adjustment applied — a planner's tune should show up here immediately,
+    the whole point of this view) disaggregated to weeks, against real
+    weekly SAP-shipped quantity (WeeklyActual — see ingestion/sap_shipments.py
+    for where that comes from). Includes `history_months` of TRAILING
+    history before the forecast's own start month, so recently-closed
+    weeks aren't blank just because the forecast horizon itself only
+    looks forward — the "planned" side of that history comes from the
+    item's own real ONE plan (_latest_plan_by_month, same master/one_row
+    merge item_detail's history uses), not the Forecast table, since a
+    ForecastRun only ever stores forward months from whenever it was run.
+
+    Week alignment caveat (see engine/weekly.py and models.WeeklyActual):
+    the disaggregated plan is Monday-anchored; a WeeklyActual row's
+    week_start is whatever date the source SAP export itself used, which
+    can differ by several days between product lines. An actual week is
+    matched to the planned week whose [Monday, Monday+7) span CONTAINS
+    it, not by exact date equality — this is an approximation, not exact
+    weekly-fitted accuracy (see engine/weekly.py's own honesty note), but
+    it's the closest alignment the two sources support today. An actual
+    week older than every planned week (real, found live 2026-07-15: SAP's
+    rolling shipment window can start before the current forecast horizon
+    does) is still shown, keyed to its own Monday-anchored week with
+    planned_qty=None, rather than silently dropped.
+
+    Tuning: this view does NOT accept writes itself — a planner tunes via
+    the existing advisory/adjustments.record_adjustment (scope="sku"),
+    the same accountable, audited, FVA-scored mechanism used everywhere
+    else in this app. `weeks[].has_adjustment` tells the caller which
+    weeks' month already carries a tune, so the UI can show that state
+    without a second write path to keep in sync. History weeks (before
+    the forecast horizon) are never tunable — a closed week is a fact,
+    not a plan — `weeks[].is_history` marks them for the UI."""
+    item = session.get(Item, item_id)
+    if item is None:
+        return None
+    run = _latest_run(session)
+    if run is None:
+        return None
+    frows = (session.query(Forecast)
+             .filter(Forecast.run_id == run.id, Forecast.item_id == item_id)
+             .order_by(Forecast.month).all())
+    if not frows:
+        return None
+
+    month_dates = [_as_date(f.month) for f in frows]
+    adjustments = _latest_adjustments(session)
+    qtys, adj_detail = _apply_adjustments(item_id, month_dates,
+                                          [f.baseline or 0.0 for f in frows], adjustments)
+
+    hist_months = [_add_months(month_dates[0], -i) for i in range(history_months, 0, -1)]
+    master_by_month = _latest_plan_by_month(session, item_id, "master")
+    one_row_by_month = _latest_plan_by_month(session, item_id, "one_row")
+    hist_by_month = {**one_row_by_month, **master_by_month}   # master preferred, see item_detail
+    hist_qtys = [hist_by_month.get(m, 0.0) for m in hist_months]
+
+    combined_months = hist_months + month_dates
+    combined_qtys = hist_qtys + qtys
+
+    weekly_plan = disaggregate_forecast(list(zip(combined_months, combined_qtys)))
+    plan_by_week: dict[date, float] = {date.fromisoformat(w["week_start"]): w["qty"]
+                                       for w in weekly_plan}
+    sorted_weeks = sorted(plan_by_week)
+    week_month: dict[date, date] = {}
+    for wk in sorted_weeks:
+        # each disaggregated week is attributed to the month its Monday
+        # falls in, for grouping weeks under a single "tune this month"
+        # control — an approximation at month-boundary weeks (see
+        # disaggregate_forecast).
+        candidates = [m for m in combined_months if m <= wk]
+        week_month[wk] = max(candidates) if candidates else combined_months[0]
+
+    actual_rows = (session.query(WeeklyActual)
+                  .filter(WeeklyActual.item_id == item_id)
+                  .order_by(WeeklyActual.week_start).all())
+    actual_by_week: dict[date, float] = {}
+    for r in actual_rows:
+        idx = bisect.bisect_right(sorted_weeks, r.week_start) - 1
+        if idx >= 0 and r.week_start < sorted_weeks[idx] + timedelta(days=7):
+            wk = sorted_weeks[idx]
+        else:
+            # older than every planned week (or no planned weeks at all) —
+            # still shown, keyed to its own Monday-anchored week.
+            wk = r.week_start - timedelta(days=r.week_start.weekday())
+        actual_by_week[wk] = actual_by_week.get(wk, 0.0) + (r.qty or 0.0)
+
+    forecast_horizon_start = month_dates[0]
+    all_weeks = sorted(set(plan_by_week) | set(actual_by_week))
+    weeks_out = []
+    for wk in all_weeks:
+        planned = plan_by_week.get(wk)
+        actual = actual_by_week.get(wk)
+        variance_pct = (round((actual - planned) / planned * 100, 1)
+                        if planned and actual is not None else None)
+        month = week_month.get(wk, wk.replace(day=1))
+        is_history = month < forecast_horizon_start
+        month_idx = month_dates.index(month) if (not is_history and month in month_dates) else None
+        weeks_out.append({
+            "week_start": wk.isoformat(), "month": month.isoformat(),
+            "planned_qty": planned, "actual_qty": actual, "variance_pct": variance_pct,
+            "is_history": is_history,
+            "has_adjustment": bool(adj_detail.get(month_idx)) if month_idx is not None else False,
+        })
+
+    return {"item_id": item.id, "name": item.canonical_name, "weeks": weeks_out}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, downloadUrl } from "../api/client";
+import { api, downloadReport } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 import type { MismatchGroup, MismatchReport } from "../api/types";
 
@@ -118,9 +118,9 @@ export default function Mismatch() {
             <h3>{t("mismatch_table_title")}</h3>
             <div className="desc">{t("mismatch_table_month", { month: report?.month ?? "—" })}</div>
           </div>
-          <a className="btn" href={downloadUrl("/export/mismatch")}>
+          <button className="btn" onClick={() => downloadReport("/export/mismatch", "mismatch.xlsx")}>
             {t("common_download_excel")}
-          </a>
+          </button>
         </div>
 
         <div className="toolbar">
@@ -267,6 +267,38 @@ export default function Mismatch() {
             })}
           </div>
         )}
+      </div>
+
+      <div className="card">
+        <div className="hd">
+          <h3>{t("mismatch_confirmed_title")}</h3>
+        </div>
+        <div style={{ padding: "16px 20px" }}>
+          <div style={{ fontSize: "0.85rem", color: "var(--muted)", marginBottom: 10 }}>
+            {t("mismatch_confirmed_body")}
+          </div>
+          {report && (
+            (report.confirmed_rule_classifications.cpu.length === 0 &&
+              report.confirmed_rule_classifications.mb.length === 0) ? (
+              <div className="dim" style={{ fontSize: "0.82rem" }}>
+                {t("mismatch_confirmed_none")}
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {report.confirmed_rule_classifications.cpu.map((name) => (
+                  <span key={`cpu-${name}`} className="pill p-medium mono">
+                    {name} ({t("mismatch_th_cpu")})
+                  </span>
+                ))}
+                {report.confirmed_rule_classifications.mb.map((name) => (
+                  <span key={`mb-${name}`} className="pill p-medium mono">
+                    {name} ({t("mismatch_th_mb")})
+                  </span>
+                ))}
+              </div>
+            )
+          )}
+        </div>
       </div>
 
       <div className="card">

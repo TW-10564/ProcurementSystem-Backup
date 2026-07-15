@@ -1,11 +1,21 @@
 """M3 deliverable — compatibility rule drafting + take-or-pay-weighted mismatch
-gate. Read-only; writes draft rules to the app's own CompatRule table only.
+gate. Read-only itself; delegates the actual CompatRule draft-write to
+advisory/rules.py's draft_spec_heuristic_rules (advisory/ is this project's
+only writable layer — moved there 2026-07-14, previously written in-line
+here).
 
 Per POC_BUILD_PLAN / BR-010: AI (here, an explicit spec-based rule engine —
-see engine/compat.py's module docstring) DRAFTS rules with a confidence
-score; nothing is auto-confirmed. The mismatch numbers below are computed
-"as if" using the draft rules, CLEARLY LABELLED as a demonstration — in
-production this calculation only runs on rules a human has confirmed.
+see engine/compat.py's module docstring — or an LLM, see
+advisory/llm_rules.py) DRAFTS rules with a confidence score; nothing is
+auto-confirmed. The mismatch gate's socket classification comes primarily
+from the deterministic table (engine/compat.py), same as always; for a
+part that table can't classify, it falls back to any CONFIRMED CompatRule
+pairing (see _confirmed_partner_family) — so confirming a draft in
+CompatReview.tsx now has a real, visible effect here. Draft (unconfirmed)
+rules are never consulted by this calculation, deterministic or LLM —
+only status='confirmed' rows count (fixed 2026-07-10; previously this
+module's own docstring claimed that already but it wasn't actually true —
+the gate ignored the CompatRule table entirely, draft or confirmed).
 """
 from __future__ import annotations
 
@@ -16,27 +26,42 @@ from sqlalchemy import func
 from ..config import ONE_DIR
 from ..db import get_session
 from ..models import Item, PlanValue, CompatRule
-from ..engine.compat import draft_cpu_mb_rules, unclassified_report
+from ..advisory.rules import draft_spec_heuristic_rules
 from ..ingestion.mb_procurement import parse_mb_takeorpay, chipset_liability_rollup
 
 
-def draft_and_store_rules(session) -> dict:
-    cpu = session.query(Item).filter(Item.category == "CPU").all()
-    mb = session.query(Item).filter(Item.category == "ﾏｻﾞｰﾎﾞｰﾄﾞ").all()
-    rules = draft_cpu_mb_rules(cpu, mb)
-    unclassified = unclassified_report(cpu, mb)
+def _confirmed_partner_family(item_id: int, session, is_cpu: bool) -> str | None:
+    """Socket family implied by CONFIRMED CompatRule pairings, for an item
+    the deterministic engine table can't classify on its own — e.g. a
+    genuinely new/obscure part an LLM drafted a pairing for, that a human
+    then reviewed and confirmed. Without this, confirming a rule in
+    CompatReview.tsx had NO effect on the mismatch gate at all (found
+    2026-07-10) — the gate always re-derived sockets from the static table
+    only, ignoring the CompatRule table entirely.
 
-    # idempotent: clear prior drafts for this pair type before re-drafting
-    session.query(CompatRule).filter(CompatRule.relation == "fits").delete()
-    for r in rules:
-        session.add(CompatRule(part_a_id=r["part_a_id"], part_b_id=r["part_b_id"],
-                               relation=r["relation"], confidence=r["confidence"],
-                               origin=r["origin"], status="draft"))
-    session.commit()
-    return {"cpu_total": len(cpu), "mb_total": len(mb), "rules_drafted": len(rules),
-           "cpu_unclassified": len(unclassified["cpu_unclassified"]),
-           "mb_unclassified": len(unclassified["mb_unclassified"]),
-           "unclassified_detail": unclassified}
+    Only trusts a family when every confirmed partner agrees; conflicting
+    confirmed pairs are treated as still-unclassified rather than guessed
+    at — same "don't substitute a plausible-looking answer" principle used
+    in the LLM drafting prompt itself."""
+    from ..engine.compat import classify_cpu_socket, classify_mb_socket
+    if is_cpu:
+        rules = session.query(CompatRule).filter(
+            CompatRule.part_a_id == item_id, CompatRule.relation == "fits",
+            CompatRule.status == "confirmed").all()
+        partner_ids = [r.part_b_id for r in rules]
+        classify = classify_mb_socket
+    else:
+        rules = session.query(CompatRule).filter(
+            CompatRule.part_b_id == item_id, CompatRule.relation == "fits",
+            CompatRule.status == "confirmed").all()
+        partner_ids = [r.part_a_id for r in rules]
+        classify = classify_cpu_socket
+    if not partner_ids:
+        return None
+    partners = session.query(Item).filter(Item.id.in_(partner_ids)).all()
+    families = {fam for p in partners
+               for fam in [classify(p.canonical_name)[0]] if fam}
+    return families.pop() if len(families) == 1 else None
 
 
 def _latest_master_month(session) -> date:
@@ -58,9 +83,12 @@ def _latest_master_month(session) -> date:
 
 
 def compute_mismatch(session) -> dict:
-    """Group Tier-1 CPU/MB latest-month master demand by socket family
-    (via confirmed... here, draft, for demo — see module docstring) and
-    compare, weighted by take-or-pay liability.
+    """Group Tier-1 CPU/MB latest-month master demand by socket family and
+    compare, weighted by take-or-pay liability. Socket family comes from
+    the deterministic table first; for items it can't classify, falls back
+    to any CONFIRMED CompatRule pairing (see _confirmed_partner_family) —
+    this is what makes confirming a rule in CompatReview.tsx actually
+    change this report, rather than being a record with no live effect.
     """
     from ..engine.compat import classify_cpu_socket, classify_mb_socket
 
@@ -74,15 +102,25 @@ def compute_mismatch(session) -> dict:
                     PlanValue.month == month).first())
         return (v[0] or 0.0) if v else 0.0
 
+    confirmed_rule_classifications = {"cpu": [], "mb": []}
+
     cpu_by_socket: dict[str, float] = {}
     for item in cpu:
         socket, conf = classify_cpu_socket(item.canonical_name)
+        if not socket:
+            socket = _confirmed_partner_family(item.id, session, is_cpu=True)
+            if socket:
+                confirmed_rule_classifications["cpu"].append(item.canonical_name)
         if socket:
             cpu_by_socket[socket] = cpu_by_socket.get(socket, 0.0) + demand(item.id)
 
     mb_by_socket: dict[str, float] = {}
     for item in mb:
         socket, conf = classify_mb_socket(item.canonical_name)
+        if not socket:
+            socket = _confirmed_partner_family(item.id, session, is_cpu=False)
+            if socket:
+                confirmed_rule_classifications["mb"].append(item.canonical_name)
         if socket:
             mb_by_socket[socket] = mb_by_socket.get(socket, 0.0) + demand(item.id)
 
@@ -116,7 +154,8 @@ def compute_mismatch(session) -> dict:
                         "severity": severity})
     results.sort(key=lambda r: (r["severity"] != "HIGH", r["severity"] != "MEDIUM",
                                 -abs(r["gap"])))
-    return {"month": month.isoformat() if month else None, "groups": results}
+    return {"month": month.isoformat() if month else None, "groups": results,
+           "confirmed_rule_classifications": confirmed_rule_classifications}
 
 
 def historical_scan(session, min_cpu_demand: float = 50.0) -> list[dict]:
@@ -133,8 +172,15 @@ def historical_scan(session, min_cpu_demand: float = 50.0) -> list[dict]:
 
     cpu = session.query(Item).filter(Item.category == "CPU").all()
     mb = session.query(Item).filter(Item.category == "ﾏｻﾞｰﾎﾞｰﾄﾞ").all()
-    cpu_socket = {i.id: classify_cpu_socket(i.canonical_name)[0] for i in cpu}
-    mb_socket = {i.id: classify_mb_socket(i.canonical_name)[0] for i in mb}
+    # same confirmed-rule fallback as compute_mismatch — a part's physical
+    # socket doesn't change over time, so today's confirmed classification
+    # applies consistently across the whole historical scan too.
+    cpu_socket = {i.id: (classify_cpu_socket(i.canonical_name)[0]
+                        or _confirmed_partner_family(i.id, session, is_cpu=True))
+                 for i in cpu}
+    mb_socket = {i.id: (classify_mb_socket(i.canonical_name)[0]
+                       or _confirmed_partner_family(i.id, session, is_cpu=False))
+                for i in mb}
     ids = [i for i in list(cpu_socket) + list(mb_socket)]
 
     rows = (session.query(PlanValue.item_id, PlanValue.month, PlanValue.value)
@@ -198,10 +244,12 @@ def acceptance_test(hist: list[dict]) -> dict:
            "planning/purchasing."}
 
 
-def run() -> dict:
+def run(session=None) -> dict:
     print("=== M3: compatibility rule drafting + mismatch gate ===")
-    session = get_session()
-    draft_stats = draft_and_store_rules(session)
+    own_session = session is None
+    if own_session:
+        session = get_session()
+    draft_stats = draft_spec_heuristic_rules(session)
     print(f"[compat] CPU items={draft_stats['cpu_total']} "
           f"(unclassified {draft_stats['cpu_unclassified']})  "
           f"MB items={draft_stats['mb_total']} "
@@ -211,8 +259,11 @@ def run() -> dict:
           "(BR-010: AI suggests, human confirms)")
 
     mismatch = compute_mismatch(session)
+    n_from_confirmed = (len(mismatch["confirmed_rule_classifications"]["cpu"])
+                       + len(mismatch["confirmed_rule_classifications"]["mb"]))
     print(f"\n[mismatch] socket-family demand comparison for {mismatch['month']} "
-          "(DEMO computation using DRAFT rules — production requires confirmed rules)")
+          f"(deterministic table + {n_from_confirmed} item(s) classified via a "
+          "human-confirmed rule — draft/unconfirmed rules are never used here)")
     print(f"{'socket':<12}{'CPU demand':>12}{'MB demand':>12}{'gap':>10}{'gap%':>8}"
           f"{'excl.':>7}{'take-or-pay':>13}{'severity':>10}")
     for g in mismatch["groups"]:
@@ -233,7 +284,8 @@ def run() -> dict:
               f"{r['mb_demand']:>12}{r['pct']:>9}%")
     result = acceptance_test(hist)
     print(f"\n[acceptance test] {result['message']}")
-    session.close()
+    if own_session:
+        session.close()
     return {"draft": draft_stats, "mismatch": mismatch, "historical_scan": hist[:20],
            "acceptance_test": result}
 

@@ -14,7 +14,7 @@ a real finding, not a foregone conclusion — this harness is what would catch i
 from __future__ import annotations
 
 from ..engine.seasonality import compute_seasonality
-from ..ingestion.keisuu import load_keisuu_history
+from ..ingestion.keisuu import parse_keisuu_history
 
 
 def _wape(actual: list[float], predicted: list[float]) -> float:
@@ -29,7 +29,7 @@ def _shape(values: list[float]) -> list[float]:
 
 
 def run(min_history: int = 5) -> dict:
-    history = load_keisuu_history()               # {期: [12 monthly units]}
+    history = parse_keisuu_history()               # {期: [12 monthly units]}
     kis = sorted(k for k in history if all(v is not None for v in history[k]))
 
     print("=== Gate C: walk-forward backtest (seasonal share vs naive baselines) ===")

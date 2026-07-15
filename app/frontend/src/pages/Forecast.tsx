@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, downloadUrl } from "../api/client";
+import { api, downloadReport } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 import type {
   ForecastDetail,
   ForecastList,
   ForecastSummary,
   OrderSuggestions,
+  PlanVsActual,
+  RebuildHistoryEntry,
 } from "../api/types";
 import type { TranslationKey } from "../i18n/translations";
 
@@ -216,8 +218,19 @@ export default function Forecast() {
   const [category, setCategory] = useState<string | null>(null);
   const [methodFilter, setMethodFilter] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildFlash, setRebuildFlash] = useState<string | null>(null);
+  const [rebuildError, setRebuildError] = useState<string | null>(null);
+  const [rebuildHistory, setRebuildHistory] = useState<RebuildHistoryEntry[]>([]);
+  const [showRebuildHistory, setShowRebuildHistory] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [planVsActual, setPlanVsActual] = useState<PlanVsActual | null>(null);
+  const [tuneMonth, setTuneMonth] = useState<string | null>(null);
+  const [tuneValue, setTuneValue] = useState("");
+  const [tuneReason, setTuneReason] = useState("");
+  const [tuneSubmitting, setTuneSubmitting] = useState(false);
+  const [tuneError, setTuneError] = useState<string | null>(null);
   const [orders, setOrders] = useState<OrderSuggestions | null>(null);
   const [showOrders, setShowOrders] = useState(false);
   const [orderSearch, setOrderSearch] = useState("");
@@ -236,6 +249,7 @@ export default function Forecast() {
   useEffect(() => {
     loadSummary();
     loadTier2Preview();
+    api.rebuildHistory(10).then(setRebuildHistory).catch(() => {});
   }, []);
 
   // Lazy-load: the order-suggestions detail is only fetched the first time
@@ -262,6 +276,48 @@ export default function Forecast() {
     return () => clearTimeout(timer);
   }, [q, category, methodFilter]);
 
+  const rebuildFromNas = async () => {
+    setRebuilding(true);
+    setRebuildFlash(null);
+    setRebuildError(null);
+    try {
+      await api.triggerRebuild();
+    } catch (e: unknown) {
+      // 409 = a rebuild was already running elsewhere — fine, just poll it
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      if (status !== 409) {
+        setRebuildError(String((e as Error).message ?? e));
+        setRebuilding(false);
+        return;
+      }
+    }
+    const poll = async () => {
+      try {
+        const s = await api.rebuildStatus();
+        if (s.status === "running") {
+          setTimeout(poll, 3000);
+          return;
+        }
+        setRebuilding(false);
+        api.rebuildHistory(10).then(setRebuildHistory).catch(() => {});
+        if (s.status === "done") {
+          const ship = s.report?.sap_shipments;
+          setRebuildFlash(
+            ship
+              ? t("fc_rebuild_done_with_shipments", { resolved: ship.resolved, unresolved: ship.unresolved })
+              : t("fc_rebuild_done")
+          );
+        } else if (s.status === "error") {
+          setRebuildError(s.error ?? t("fc_rebuild_error_unknown"));
+        }
+      } catch (e: unknown) {
+        setRebuilding(false);
+        setRebuildError(String((e as Error).message ?? e));
+      }
+    };
+    poll();
+  };
+
   const run = async () => {
     setRunning(true);
     setFlash(null);
@@ -280,8 +336,45 @@ export default function Forecast() {
     }
   };
 
-  const openDetail = (itemId: number) =>
+  const openDetail = (itemId: number) => {
     api.forecastDetail(itemId).then(setDetail).catch((e) => setError(String(e.message ?? e)));
+    api.planVsActual(itemId).then(setPlanVsActual).catch(() => setPlanVsActual(null));
+  };
+
+  const startTune = (month: string, currentPlanned: number) => {
+    setTuneMonth(month);
+    setTuneValue(String(Math.round(currentPlanned)));
+    setTuneReason("");
+    setTuneError(null);
+  };
+
+  const submitTune = async () => {
+    if (!detail || !tuneMonth) return;
+    const newValue = Number(tuneValue);
+    if (!Number.isFinite(newValue) || newValue < 0) {
+      setTuneError(t("fc_tune_invalid_value"));
+      return;
+    }
+    if (!tuneReason.trim()) {
+      setTuneError(t("fc_tune_missing_reason"));
+      return;
+    }
+    setTuneSubmitting(true);
+    setTuneError(null);
+    try {
+      const author = localStorage.getItem("onefcst_author") ?? "bala";
+      await api.createAdjustment({
+        item_id: detail.item.id, month: tuneMonth, new_value: newValue,
+        scope: "sku", reason: tuneReason.trim(), author,
+      });
+      setTuneMonth(null);
+      await openDetail(detail.item.id);
+    } catch (e: unknown) {
+      setTuneError(String((e as Error).message ?? e));
+    } finally {
+      setTuneSubmitting(false);
+    }
+  };
 
   // Deep-link support: /forecast?item=123 (used by the Adjustments page's
   // "view in forecast" link) opens that item's detail automatically, so
@@ -348,14 +441,71 @@ export default function Forecast() {
             <p>{t("fc_sub")}</p>
           </div>
           <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-            <a className="btn" href={downloadUrl("/export/forecasts")}>
+            <button className="btn" onClick={() => downloadReport("/export/forecasts", "forecasts.xlsx")}>
               {t("common_download_excel")}
-            </a>
+            </button>
+            <button className="btn" onClick={rebuildFromNas} disabled={rebuilding} title={t("fc_rebuild_hint")}>
+              {rebuilding ? t("fc_rebuilding") : t("fc_rebuild")}
+            </button>
             <button className="btn" onClick={run} disabled={running}>
               {running ? t("fc_running") : t("fc_run")}
             </button>
           </div>
         </div>
+        {rebuildFlash && <div className="banner info">✅ {rebuildFlash}</div>}
+        {rebuildError && <div className="banner warn">⚠️ {t("fc_rebuild_error_prefix")}: {rebuildError}</div>}
+        {rebuildHistory.length > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <button
+              className="btn"
+              style={{ padding: "2px 8px", fontSize: "0.72rem" }}
+              onClick={() => setShowRebuildHistory((v) => !v)}
+            >
+              {showRebuildHistory ? t("fc_rebuild_history_hide") : t("fc_rebuild_history_show")}
+            </button>
+            {showRebuildHistory && (
+              <div className="tablewrap" style={{ maxHeight: 220, marginTop: 6 }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{t("fc_rebuild_history_th_trigger")}</th>
+                      <th>{t("fc_rebuild_history_th_when")}</th>
+                      <th>{t("fc_rebuild_history_th_status")}</th>
+                      <th>{t("fc_rebuild_history_th_detail")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rebuildHistory.map((h) => (
+                      <tr key={h.id}>
+                        <td>
+                          {h.trigger === "manual" ? t("fc_rebuild_history_manual") : t("fc_rebuild_history_scheduled")}
+                        </td>
+                        <td className="dim mono" style={{ fontSize: "0.78rem" }}>
+                          {new Date(h.started_at + "Z").toLocaleString(lang === "ja" ? "ja-JP" : "en-US")}
+                        </td>
+                        <td>
+                          {h.status === "running" && <span className="pill">{t("fc_rebuilding")}</span>}
+                          {h.status === "done" && <span style={{ color: "var(--green)" }}>✅ {t("fc_rebuild_history_done")}</span>}
+                          {h.status === "error" && <span style={{ color: "var(--red)" }}>⚠️ {t("fc_rebuild_history_failed")}</span>}
+                        </td>
+                        <td className="dim" style={{ fontSize: "0.78rem" }}>
+                          {h.status === "error"
+                            ? h.error
+                            : h.report?.sap_shipments
+                              ? t("fc_rebuild_history_shipments_detail", {
+                                  resolved: h.report.sap_shipments.resolved,
+                                  unresolved: h.report.sap_shipments.unresolved,
+                                })
+                              : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
         <div className="stats" style={{ marginTop: 14 }}>
           <div className="stat">
             <div className="lab">{lang === "ja" ? "最終実行" : "Last run"}</div>
@@ -782,8 +932,12 @@ export default function Forecast() {
               <div className="desc">
                 {detail.item.category} ・ {methodLabel(detail.method)}
                 {detail.item.moq ? ` ・ ${t("fc_moq")}: ${fmtQty(detail.item.moq)}` : ""}
-                {detail.item.lead_time_days
-                  ? ` ・ ${t("fc_lead")}: ${t("fc_lead_days", { n: Math.round(detail.item.lead_time_days) })}`
+                {detail.item.effective_lead_time_days
+                  ? ` ・ ${t("fc_lead")}: ${t("fc_lead_days", { n: Math.round(detail.item.effective_lead_time_days) })}` +
+                    (detail.item.observed_lead_time_days != null &&
+                     (detail.item.observed_lead_time_samples ?? 0) >= 3
+                      ? ` (${t("fc_lead_observed", { n: detail.item.observed_lead_time_samples })})`
+                      : "")
                   : ""}
                 {detail.stock
                   ? ` ・ ${t("fc_stock_now")}: ${fmtQty(detail.stock.sap_qty ?? detail.stock.one_balance)}`
@@ -795,7 +949,7 @@ export default function Forecast() {
                 </div>
               )}
             </div>
-            <button className="btn" onClick={() => setDetail(null)}>
+            <button className="btn" onClick={() => { setDetail(null); setPlanVsActual(null); setTuneMonth(null); }}>
               {t("fc_detail_close")}
             </button>
           </div>
@@ -847,6 +1001,125 @@ export default function Forecast() {
                       </tbody>
                     </table>
                   </div>
+                </div>
+              </>
+            )}
+
+            {planVsActual && planVsActual.weeks.length > 0 && (
+              <>
+                <SectionLabel>{t("fc_pva_title")}</SectionLabel>
+                <div className="card" style={{ margin: "0 0 4px" }}>
+                  <div className="dim" style={{ fontSize: "0.78rem", padding: "12px 16px 10px" }}>
+                    {t("fc_pva_desc")}
+                  </div>
+                  <div className="tablewrap" style={{ maxHeight: 320, padding: "0 4px 8px" }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>{t("fc_pva_th_week")}</th>
+                          <th className="num">{t("fc_pva_th_planned")}</th>
+                          <th className="num">{t("fc_pva_th_actual")}</th>
+                          <th className="num">{t("fc_pva_th_variance")}</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const seenMonths = new Set<string>();
+                          let dividerShown = false;
+                          return planVsActual.weeks.flatMap((w) => {
+                            const isFirstOfMonth = !seenMonths.has(w.month);
+                            seenMonths.add(w.month);
+                            const rows = [];
+                            if (!w.is_history && !dividerShown) {
+                              dividerShown = true;
+                              rows.push(
+                                <tr key="divider">
+                                  <td colSpan={5} className="dim" style={{ fontSize: "0.72rem", padding: "4px 8px", borderTop: "1px dashed var(--border)", borderBottom: "1px dashed var(--border)" }}>
+                                    {t("fc_pva_forecast_divider")}
+                                  </td>
+                                </tr>
+                              );
+                            }
+                            rows.push(
+                              <tr key={w.week_start} style={w.is_history ? { opacity: 0.65 } : undefined}>
+                                <td className="mono">
+                                  {fmtMonth(w.week_start, lang)} ({w.week_start.slice(8, 10)})
+                                </td>
+                                <td className="num mono">
+                                  {w.planned_qty !== null ? fmtQty(w.planned_qty) : "—"}
+                                  {w.has_adjustment && (
+                                    <span title={t("fc_pva_tuned_badge")} style={{ marginLeft: 4, color: "var(--amber)" }}>
+                                      ✎
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="num mono">
+                                  {w.actual_qty !== null ? fmtQty(w.actual_qty) : "—"}
+                                </td>
+                                <td
+                                  className="num mono"
+                                  style={{
+                                    color: w.variance_pct === null ? undefined
+                                          : w.variance_pct < 0 ? "var(--red)" : "var(--green)",
+                                  }}
+                                >
+                                  {w.variance_pct !== null ? `${w.variance_pct > 0 ? "+" : ""}${w.variance_pct}%` : "—"}
+                                </td>
+                                <td>
+                                  {isFirstOfMonth && !w.is_history && w.planned_qty !== null && (
+                                    <button
+                                      className="btn"
+                                      style={{ padding: "2px 8px", fontSize: "0.72rem" }}
+                                      onClick={() => startTune(w.month, w.planned_qty!)}
+                                    >
+                                      {t("fc_pva_tune_btn")}
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                            return rows;
+                          });
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                  {tuneMonth && (
+                    <div style={{ padding: "10px 16px 16px", borderTop: "1px solid var(--border)" }}>
+                      <div style={{ fontWeight: 700, fontSize: "0.85rem", marginBottom: 8 }}>
+                        {t("fc_tune_form_title", { month: fmtMonth(tuneMonth, lang) })}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                        <div>
+                          <label style={{ display: "block", fontSize: "0.72rem" }}>{t("fc_tune_value_label")}</label>
+                          <input
+                            type="number" min={0} value={tuneValue}
+                            onChange={(e) => setTuneValue(e.target.value)}
+                            style={{ width: 100 }}
+                          />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 180 }}>
+                          <label style={{ display: "block", fontSize: "0.72rem" }}>{t("adj_reason_label")}</label>
+                          <input
+                            type="text" value={tuneReason}
+                            onChange={(e) => setTuneReason(e.target.value)}
+                            placeholder={t("adj_reason_placeholder")}
+                            style={{ width: "100%" }}
+                          />
+                        </div>
+                        <button className="btn" disabled={tuneSubmitting} onClick={submitTune}>
+                          {tuneSubmitting ? t("fc_running") : t("fc_tune_save")}
+                        </button>
+                        <button className="btn" onClick={() => setTuneMonth(null)}>
+                          {t("fc_tune_cancel")}
+                        </button>
+                      </div>
+                      {tuneError && (
+                        <div className="banner warn" style={{ marginTop: 8 }}>⚠️ {tuneError}</div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -978,6 +1251,7 @@ export default function Forecast() {
                     <th>{t("fc_th_item")}</th>
                     <th>{t("fc_th_category")}</th>
                     <th>{t("fc_th_method")}</th>
+                    <th>{t("fc_th_last_active")}</th>
                     <th className="num">{t("fc_th_wape")}</th>
                     <th className="num">{t("fc_th_stock")}</th>
                     {monthCols.map((m) => (
@@ -1014,6 +1288,9 @@ export default function Forecast() {
                       </td>
                       <td className="dim">{r.category ?? "—"}</td>
                       <td className="dim">{methodLabel(r.method)}</td>
+                      <td className="dim">
+                        {r.last_active_month ? fmtMonth(r.last_active_month, lang) : "—"}
+                      </td>
                       <td className="num mono dim"
                           title={r.wape_full_horizon !== null
                                 ? t("fc_wape_full_horizon_tooltip", { wape: r.wape_full_horizon })

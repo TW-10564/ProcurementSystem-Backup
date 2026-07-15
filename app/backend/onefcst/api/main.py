@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from .. import scheduler as scheduler_mod
+from ..config import CORS_ORIGINS
 from ..db import get_session
 from ..models import Item, CompatRule, Adjustment
 from ..advisory import rules as rules_svc
@@ -25,7 +26,8 @@ from ..advisory import adjustments as adj_svc
 from ..advisory import notifications as notif_svc
 from .auth import require_api_key
 from .schemas import (CompatRuleOut, ConfirmRequest, RejectRequest,
-                      AdjustmentIn, AdjustmentOut, NotificationOut)
+                      EditRuleRequest, AdjustmentIn, AdjustmentOut,
+                      NotificationOut)
 
 
 @asynccontextmanager
@@ -41,9 +43,10 @@ app = FastAPI(title="onefcst — Forecasting & Procurement Decision Support",
              "sources; writes only to this app's own database.",
              lifespan=lifespan, dependencies=[Depends(require_api_key)])
 
-# Dev-only CORS: the SPA (Vite dev server) runs on a different origin.
-# Tighten to the deployed dashboard's real origin before any production use.
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
+# CORS: the SPA (Vite dev server) runs on a different origin. Defaults to
+# localhost-only (see config.CORS_ORIGINS) — set ONEFCST_CORS_ORIGINS to the
+# deployed dashboard's real origin(s) before hosting this anywhere else.
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"],
                    allow_headers=["*"])
 
 
@@ -58,6 +61,57 @@ def db():
 @app.get("/health")
 def health():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
+
+# ------------------------------------------------------------------ build ---
+# Re-ingest from the NAS on demand. Runs rebuild_preserving.run() (NEVER bare
+# build.run()) so human-entered data — Adjustments, CompatRules, AuditLog,
+# real Actual sales history — survives the drop+rebuild build.run() does
+# internally; see rebuild_preserving.py's module docstring and
+# PILOT_DEPLOY_PLAN.md blocker #1 for why that distinction is load-bearing.
+# A real rebuild takes several minutes and touches the DB file other
+# requests read from, so it runs in a background thread (asyncio.to_thread,
+# same pattern scheduler.py already uses for the exact same blocking call)
+# rather than blocking the request — the endpoint returns immediately and
+# the frontend polls /build/rebuild/status.
+#
+# Attempts (this button's AND scheduler.py's own automatic weekly cycle)
+# are recorded through the shared rebuild_status module — see its
+# docstring for why: a scheduled rebuild failing in production used to be
+# visible only in server stdout.
+from .. import rebuild_status as rebuild_status_mod
+
+
+async def _run_rebuild_in_background(entry: dict) -> None:
+    import asyncio
+    from ..rebuild_preserving import run as run_rebuild
+    try:
+        report = await asyncio.to_thread(run_rebuild)
+        rebuild_status_mod.finish(entry, report)
+    except Exception as e:
+        rebuild_status_mod.fail(entry, repr(e))
+
+
+@app.post("/build/rebuild")
+async def trigger_rebuild():
+    import asyncio
+    if rebuild_status_mod.is_running():
+        raise HTTPException(status_code=409, detail="A rebuild is already running")
+    entry = rebuild_status_mod.start("manual")
+    asyncio.create_task(_run_rebuild_in_background(entry))
+    return {"status": "started"}
+
+
+@app.get("/build/rebuild/status")
+def get_rebuild_status():
+    return rebuild_status_mod.current() or {"status": "idle", "trigger": None,
+                                            "started_at": None, "finished_at": None,
+                                            "report": None, "error": None}
+
+
+@app.get("/build/rebuild/history")
+def get_rebuild_history(limit: int = 20):
+    return rebuild_status_mod.history(limit)
 
 
 # ---------------------------------------------------------------- compat ---
@@ -93,6 +147,27 @@ def reject_compat_rule(rule_id: int, body: RejectRequest, session: Session = Dep
         r = rules_svc.reject_rule(session, rule_id, body.author, body.reason)
     except rules_svc.RuleNotFound as e:
         raise HTTPException(404, str(e))
+    items = {i.id: i.canonical_name for i in session.query(Item).all()}
+    return CompatRuleOut(id=r.id, part_a_id=r.part_a_id, part_a_name=items.get(r.part_a_id, "?"),
+                         part_b_id=r.part_b_id, part_b_name=items.get(r.part_b_id, "?"),
+                         relation=r.relation, confidence=r.confidence, origin=r.origin,
+                         status=r.status, confirmed_by=r.confirmed_by, note=r.note)
+
+
+@app.patch("/compat-rules/{rule_id}", response_model=CompatRuleOut)
+def edit_compat_rule(rule_id: int, body: EditRuleRequest, session: Session = Depends(db)):
+    """Correct a draft rule's own judgement (confidence/relation/note)
+    before deciding confirm/reject — e.g. the AI got the confidence wrong,
+    or a reviewer wants to record their own reasoning. Only allowed on
+    status='draft' rules; a confirmed/rejected rule is a settled decision
+    (see advisory/rules.py::edit_rule's docstring)."""
+    try:
+        r = rules_svc.edit_rule(session, rule_id, body.author, relation=body.relation,
+                                confidence=body.confidence, note=body.note)
+    except rules_svc.RuleNotFound as e:
+        raise HTTPException(404, str(e))
+    except rules_svc.RuleNotEditable as e:
+        raise HTTPException(409, str(e))
     items = {i.id: i.canonical_name for i in session.query(Item).all()}
     return CompatRuleOut(id=r.id, part_a_id=r.part_a_id, part_a_name=items.get(r.part_a_id, "?"),
                          part_b_id=r.part_b_id, part_b_name=items.get(r.part_b_id, "?"),
@@ -216,6 +291,22 @@ def forecast_detail(item_id: int, session: Session = Depends(db)):
     return detail
 
 
+@app.get("/forecasts/{item_id}/plan-vs-actual")
+def get_plan_vs_actual(item_id: int, history_months: int = 1, session: Session = Depends(db)):
+    """System-planned quantity (weekly-disaggregated, adjustments already
+    applied) vs real weekly SAP-shipped quantity, including a trailing
+    window of already-closed history — see forecast_views.plan_vs_actual
+    for the week-alignment caveat and why history needs its own plan
+    source. Tuning goes through the existing POST /adjustments
+    (scope="sku"), not a write path on this endpoint — see that
+    function's own docstring."""
+    from .. import forecast_views
+    result = forecast_views.plan_vs_actual(session, item_id, history_months=history_months)
+    if result is None:
+        raise HTTPException(404, "item not found or no forecast run yet")
+    return result
+
+
 # -------------------------------------------------------------- reports ----
 # mismatch/backtest recompute over the full plan-value history (~6-10s each);
 # the dashboard requests both on every mount, so cache until the next build.
@@ -274,6 +365,26 @@ def get_planner_accuracy(session: Session = Depends(db)):
 @app.get("/reports/adjustment-rate")
 def get_adjustment_rate(session: Session = Depends(db)):
     return adj_svc.adjustment_rate(session)
+
+
+@app.get("/reports/discontinuation-risk")
+def get_discontinuation_risk(session: Session = Depends(db)):
+    """Items with a sharp recent demand falloff the forecast hasn't caught
+    up to yet — see verify/discontinuation.py for the exact heuristic and
+    why is_stale/apply_discontinuation_signal/Item.lifecycle don't already
+    cover this case for most categories."""
+    from ..verify.discontinuation import run as run_discontinuation
+    return _cached("discontinuation-risk", lambda: run_discontinuation(session))
+
+
+@app.get("/reports/stock-reconciliation")
+def get_stock_reconciliation(session: Session = Depends(db)):
+    """SAP vs ONE stock disagreement, and which items have no SAP coverage
+    at all — see verify/stock_reconciliation.py. SAP is always the value
+    actually used (trusted_current_balance); this report is for visibility
+    into how much of the catalogue rests on unverified ONE-only data."""
+    from ..verify.stock_reconciliation import run as run_stock_reconciliation
+    return _cached("stock-reconciliation", lambda: run_stock_reconciliation(session))
 
 
 # --------------------------------------------------------------- exports ---

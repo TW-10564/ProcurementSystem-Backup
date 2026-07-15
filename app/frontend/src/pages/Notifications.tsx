@@ -30,10 +30,12 @@ export default function Notifications() {
   } | null>(null);
   const [author, setAuthor] = useState<string | null>(null);
   const [kind, setKind] = useState<Kind | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.notifications(200).then(setList);
-    api.notificationSummary().then(setSummary);
+    const onError = (e: unknown) => setError(String((e as Error).message ?? e));
+    api.notifications(200).then(setList).catch(onError);
+    api.notificationSummary().then(setSummary).catch(onError);
   }, []);
 
   const ja = lang === "ja";
@@ -107,6 +109,8 @@ export default function Notifications() {
         <h2>{t("notif_title")}</h2>
         <p>{t("notif_sub")}</p>
       </div>
+
+      {error && <div className="banner warn">⚠️ {error}</div>}
 
       {summary && (
         <div className="kpis">

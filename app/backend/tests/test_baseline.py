@@ -204,6 +204,37 @@ def test_make_forecast_skips_stale_and_uses_winner():
     assert [v for _, v in rows] == pytest.approx(shape)
 
 
+def test_seasonal_withheld_when_yoy_level_has_collapsed():
+    # 30 months at a real seasonal shape, then a collapse to near-zero for
+    # the final 3 — the TFX300 pattern (real case, 2026-07-09) that made
+    # 'seasonal' win its own hold-out (deceptively good in-sample) then
+    # score far worse than every other candidate out-of-sample, because
+    # deseasonalizing the depressed recent level by the OLD calendar-month
+    # index pulls the forecast back toward pre-collapse volume.
+    shape = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
+    # last of the 33 months must land the month before START (2026-06-01)
+    # so the collapse is inside build_window's cutoff, not excluded by it
+    values = (shape * 3)[:30] + [5.0, 3.0, 4.0]
+    obs = series(date(2023, 10, 1), values)
+    window = baseline.build_window(obs, START)
+    assert not baseline._is_seasonal_eligible(window)
+    cands = baseline.candidate_forecasts(window, START, 12)
+    assert "seasonal" not in cands
+
+
+def test_seasonal_stays_eligible_for_a_normal_cyclical_trough():
+    # regression guard: an EARLIER all-time-peak-based version of the gate
+    # false-positived here, because a normal seasonal trough (Jan, the low
+    # point of the cycle) sits well below the annual peak (Dec) even with
+    # no real decline — must compare year-over-year, not to the peak.
+    shape = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
+    obs = series(date(2022, 7, 1), [float(v) for v in shape * 4])
+    window = baseline.build_window(obs, START)
+    assert baseline._is_seasonal_eligible(window)
+    cands = baseline.candidate_forecasts(window, START, 12)
+    assert "seasonal" in cands
+
+
 def test_short_history_falls_back_to_default():
     obs = series(date(2026, 4, 1), [10.0, 12.0, 14.0])
     rows, method = baseline.make_forecast(obs, START, horizon=6)

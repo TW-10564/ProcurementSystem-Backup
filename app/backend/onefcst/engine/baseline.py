@@ -40,6 +40,34 @@ from datetime import date
 
 SEASONAL_WINDOW = 36        # months of history the seasonal fit may use
 SEASONAL_MIN_MONTHS = 18    # below this, seasonality is noise → not a candidate
+SEASONAL_DECLINE_GATE = 0.5  # recent-3mo level must be at least this fraction
+                             # of the SAME 3-month period one year earlier
+                             # (year-over-year, not vs the window's all-time
+                             # peak — an all-time-peak version false-positived
+                             # on genuinely cyclical series, since ANY normal
+                             # seasonal trough sits well below the annual
+                             # peak; a proven test fixture (12-month sawtooth,
+                             # tests/test_baseline.py) failed under that
+                             # version), or 'seasonal' is withheld as a
+                             # candidate. Verified 2026-07-09: when a SKU is
+                             # winding down, seasonal's deseasonalization step
+                             # divides the (already depressed) recent level by
+                             # a calendar-month index derived from the OLD,
+                             # higher-volume months — pulling the forecast
+                             # back toward the pre-decline level instead of
+                             # tracking the real drop. Real case: TFX300 held
+                             # prior demand ~700-3,800/mo for 30 months then
+                             # collapsed to 7-535/mo in the final 3 — seasonal
+                             # won its selection hold-out (252.5% WAPE,
+                             # decisively ahead of every other candidate) but
+                             # scored 1171.3% out-of-sample, worse than ALL
+                             # other candidates including naive flat6
+                             # (541.4%); gating it here drops TFX300 to 144.5%
+                             # via the existing DEFAULT_METHOD fallback in
+                             # make_forecast(). Portfolio-wide backtest (273
+                             # items) with the year-over-year version: overall
+                             # WAPE 99.44%→98.37%, 電源S 138.78%→130.87% (now
+                             # beating naive), ｻﾌﾟﾗｲ用品N 240.85%→172.11%.
 LEVEL_MONTHS = 6            # recent months that set the seasonal volume level
 STALE_MONTHS = 6            # no data in the last N months → skip the SKU
 HOLDOUT_MONTHS = 6          # test window for method selection + validation
@@ -160,6 +188,29 @@ def _seasonal(window: list[tuple[date, float]],
             for m in months]
 
 
+def _is_seasonal_eligible(window: list[tuple[date, float]]) -> bool:
+    """False when the series has collapsed relative to itself a year ago
+    (see SEASONAL_DECLINE_GATE) — a winding-down SKU where seasonal's
+    calendar-index deseasonalization would pull the forecast back toward
+    the old, higher-volume level instead of tracking the real decline.
+
+    Deliberately year-over-year, not vs the window's all-time peak: a
+    normal seasonal trough also sits well below the annual peak, so an
+    all-time-peak comparison false-positives on exactly the genuinely
+    cyclical series this method exists for (caught by
+    test_holdout_picks_seasonal_for_seasonal_series). Comparing the same
+    3-month period 12 months apart isolates a real year-over-year drop
+    from ordinary within-year seasonality."""
+    if len(window) < 15:
+        return True
+    vals = [v for _, v in window]
+    year_ago3 = sum(vals[-15:-12]) / 3
+    if year_ago3 <= 0:
+        return True
+    recent3 = sum(vals[-3:]) / 3
+    return recent3 / year_ago3 >= SEASONAL_DECLINE_GATE
+
+
 def candidate_forecasts(window: list[tuple[date, float]], start_month: date,
                         horizon: int) -> dict[str, list[tuple[date, float]]]:
     """Every method that can be fit on this window, keyed by name."""
@@ -174,7 +225,7 @@ def candidate_forecasts(window: list[tuple[date, float]], start_month: date,
     trend = _trend(window, months)
     if trend is not None:
         out["trend"] = trend
-    if len(window) >= SEASONAL_MIN_MONTHS:
+    if len(window) >= SEASONAL_MIN_MONTHS and _is_seasonal_eligible(window):
         seasonal = _seasonal(window, months)
         if seasonal is not None:
             out["seasonal"] = seasonal
@@ -185,11 +236,26 @@ def candidate_forecasts(window: list[tuple[date, float]], start_month: date,
     return out
 
 
-def wape(actual: list[float], predicted: list[float]) -> float | None:
-    den = sum(abs(a) for a in actual)
+def wape(actual: list[float], predicted: list[float], *, skip_none: bool = False,
+        round_to: int | None = None) -> float | None:
+    """Weighted Absolute Percentage Error — the one copy shared by baseline,
+    tier2, and fva scoring (previously three independent copies that could
+    silently drift; consolidated 2026-07-14).
+
+    skip_none=True drops any (actual, predicted) pair where either side is
+    None instead of letting abs() raise — engine/fva.py's callers can see
+    un-forecasted months. round_to rounds the result (engine/fva.py rounds
+    for display; baseline/tier2 leave it unrounded)."""
+    pairs = zip(actual, predicted)
+    if skip_none:
+        pairs = [(a, p) for a, p in pairs if a is not None and p is not None]
+    else:
+        pairs = list(pairs)
+    den = sum(abs(a) for a, _ in pairs)
     if not den:
         return None
-    return 100 * sum(abs(a - p) for a, p in zip(actual, predicted)) / den
+    result = 100 * sum(abs(a - p) for a, p in pairs) / den
+    return round(result, round_to) if round_to is not None else result
 
 
 def select_winner(wapes: dict[str, float]) -> str:

@@ -15,6 +15,26 @@ project memory) never resets the clock or causes runs to pile up.
 
 Writes ONLY through forecasting.generate(), which itself writes only to
 the app's own DB (Phase-1 read-only-against-NAS rule, unchanged).
+
+On the same weekly cadence, this loop also re-ingests from the NAS
+(rebuild_preserving.run(), which wraps build.run()'s full drop+rebuild with
+translation logic that carries Adjustments/ForecastRun/AccuracyScore/
+PlannerSnapshot history across it — see rebuild_preserving.py's docstring
+for why a naive build.run() call here would silently erase them every week).
+
+Rebuild attempts (this loop's own AND the "Rebuild from NAS" UI button's)
+are recorded through rebuild_status.py, so a scheduled rebuild that fails
+(e.g. NAS temporarily unreachable) is visible on the Forecast page, not
+only in server stdout. A rebuild failure does NOT abort the cycle —
+forecasting.generate() still runs against whatever data already exists
+(build.py's own pre-flight check, added 2026-07-15, guarantees a failed
+rebuild never leaves the DB in a half-wiped state, so "existing data" here
+is always coherent) — a stale-but-working forecast beats no forecast at
+all. Note this means is_due() (keyed off the last ForecastRun, not the
+last successful rebuild) won't retry a failed rebuild until the next full
+interval elapses, not the next poll — a known tradeoff, not a fix for
+this session (see FIX_PLAN's existing note on retry/backoff being a
+separate, lower-priority concern).
 """
 from __future__ import annotations
 
@@ -24,6 +44,8 @@ from datetime import datetime, timedelta
 from .config import SCHEDULER_ENABLED, SCHEDULER_INTERVAL_HOURS, SCHEDULER_POLL_SECONDS
 from .db import get_session
 from .forecasting import generate, latest_run
+from . import rebuild_preserving
+from . import rebuild_status
 
 
 def is_due(session, interval_hours: float = SCHEDULER_INTERVAL_HOURS) -> bool:
@@ -36,15 +58,39 @@ def is_due(session, interval_hours: float = SCHEDULER_INTERVAL_HOURS) -> bool:
 
 def run_if_due() -> dict | None:
     """One synchronous check-and-maybe-run cycle. Returns the run summary
-    if it ran, None if it wasn't due yet. Safe to call repeatedly — the
-    due-check and the run happen against the same session/transaction."""
+    if it ran, None if it wasn't due yet (or a rebuild was already running
+    — see rebuild_status.is_running(), avoids two concurrent
+    rebuild_preserving.run() calls stepping on each other's DB access).
+    Re-ingests from the NAS (history-preserving) before regenerating
+    forecasts, so the weekly cycle actually picks up NAS changes instead
+    of only recomputing against a stale DB. A rebuild failure is recorded
+    (visible via /build/rebuild/status and /history) but does not abort
+    forecast generation — see module docstring."""
     session = get_session()
     try:
-        if not is_due(session):
-            return None
-        return generate(session)
+        due = is_due(session)
     finally:
         session.close()
+    if not due or rebuild_status.is_running():
+        return None
+
+    entry = rebuild_status.start("scheduled")
+    rebuild_report = None
+    try:
+        rebuild_report = rebuild_preserving.run()
+        rebuild_status.finish(entry, rebuild_report)
+    except Exception as e:                          # noqa: BLE001
+        rebuild_status.fail(entry, repr(e))
+        print(f"[scheduler] rebuild failed, regenerating forecast from "
+             f"existing data anyway: {e!r}")
+
+    session = get_session()
+    try:
+        result = generate(session)
+    finally:
+        session.close()
+    result["rebuild"] = rebuild_report
+    return result
 
 
 async def loop(poll_seconds: float = SCHEDULER_POLL_SECONDS) -> None:

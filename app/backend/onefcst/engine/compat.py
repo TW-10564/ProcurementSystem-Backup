@@ -20,6 +20,10 @@ import re
 
 # -- Intel Core generation -> socket family --------------------------------
 INTEL_GEN_SOCKET = {
+    3: "LGA1155",       # Ivy Bridge — added 2026-07-10, was missing entirely
+                        # (table previously started at gen4); a gen3 item
+                        # used to fall through to the LLM with no correct
+                        # answer available in its family whitelist at all
     4: "LGA1150", 5: "LGA1150",
     6: "LGA1151v1", 7: "LGA1151v1",
     8: "LGA1151v2", 9: "LGA1151v2",
@@ -41,6 +45,28 @@ INTEL_HEDT_OVERRIDE = {
     "i910980XE": "LGA2066",
 }
 
+# Desktop "C"-suffix Broadwell CPUs — Intel's high-iGPU desktop parts, the
+# only two Core "C" SKUs that were ever desktop, not mobile. Found
+# 2026-07-10: _MOBILE_SUFFIX_RE below reads a trailing "C" as a laptop
+# indicator (correct for most suffixes), which wrongly routed these two
+# genuinely-classifiable desktop CPUs to the LLM drafting path — one came
+# back with a real factual error (called "Skylake"/LGA1151v1; actually
+# Broadwell/LGA1150, verified against public spec sheets). Listed
+# explicitly rather than special-casing the regex, matching the
+# INTEL_HEDT_OVERRIDE/THREADRIPPER_OVERRIDE pattern above.
+INTEL_DESKTOP_C_OVERRIDE = {
+    "i55675C": "LGA1150", "i75775C": "LGA1150",
+}
+
+# AMD Threadripper desktop SKUs reuse the "TR" prefix across three
+# unrelated sockets by generation — a digit-pattern rule would be unsafe,
+# so (like INTEL_HEDT_OVERRIDE above) these are listed explicitly, verified
+# against public spec sheets: 3960X/3970X are 3rd Gen ("Castle Peak"),
+# socket sTRX4 — the SAME family as the TRX40 chipset already below.
+THREADRIPPER_OVERRIDE = {
+    "TR3960X": "sTRX4", "TR3970X": "sTRX4",
+}
+
 # Celeron/Pentium "G" desktop SKUs verified against this catalogue's exact
 # model list (era identified from the public Intel G-series numbering).
 CELERON_PENTIUM_G_MAP = {
@@ -48,6 +74,12 @@ CELERON_PENTIUM_G_MAP = {
     "cG3900": "LGA1151v1", "cG3930": "LGA1151v1",       # Skylake (gen6 era)
     "cG4900": "LGA1151v2", "cG4930": "LGA1151v2",       # Coffee Lake (gen8 era)
     "G6900": "LGA1700",                                  # Alder Lake (gen12 era)
+    "cG5900": "LGA1200", "cG5905": "LGA1200",           # Comet Lake (gen10 era)
+                                                           # — added 2026-07-10,
+                                                           # a live LLM pass
+                                                           # wrongly dismissed
+                                                           # these as "not a
+                                                           # standard CPU model"
 }
 
 # -- Motherboard chipset -> socket family (verified from ONE MB item names) --
@@ -78,6 +110,12 @@ CHIPSET_SOCKET = {
     "W880": "LGA1851", "Z890": "LGA1851",
     # Intel HEDT
     "X299": "LGA2066", "X99": "LGA2011v3",
+    # Intel Xeon W workstation (Sapphire Rapids-WS) — a DISTINCT platform
+    # from consumer LGA1700, added 2026-07-10 after the LLM drafter wrongly
+    # paired this chipset with LGA1700 CPUs (it wasn't in the family
+    # whitelist, so the model substituted the nearest-sounding option
+    # instead of answering "unknown" as instructed).
+    "W790": "LGA4677",
     # AMD AM3+ (FX)
     "970A": "AM3+", "990FX": "AM3+",
     # AMD FM2+ (A-series APUs)
@@ -90,10 +128,17 @@ CHIPSET_SOCKET = {
     "X670": "AM5", "X870": "AM5",
     # AMD Threadripper
     "TRX40": "sTRX4", "TRX50": "sTR5", "WRX90": "sWRX9",
+    # AMD Threadripper 1st/2nd Gen ("Whitehaven"/"Colfax") — an OLDER,
+    # distinct socket (TR4) from TRX40's sTRX4; do not merge the two.
+    "X399": "TR4",
 }
 
 _INTEL_CORE_RE = re.compile(r"^i([3579])(\d{2,3})(\d{2,3})([A-Z]*)$")
-_INTEL_ULTRA_RE = re.compile(r"^U[579]-\d")     # Core Ultra 200S "Arrow Lake-S"
+# Core Ultra 200S "Arrow Lake-S". Hyphen made optional 2026-07-10: this
+# catalogue uses BOTH "U7-265K" and "U7265K" (no hyphen) forms for the same
+# tier of chip — the no-hyphen items were previously falling through to the
+# LLM, which also failed to recognize them (verified via a live test pass).
+_INTEL_ULTRA_RE = re.compile(r"^U[579]-?\d")
 _MOBILE_SUFFIX_RE = re.compile(r"(M|MQ|U|H|HQ|C)$")   # laptop-only SKUs
 _XEON_RE = re.compile(r"^x", re.IGNORECASE)
 _CELERON_PENTIUM_RE = re.compile(r"^[cp]", re.IGNORECASE)
@@ -108,6 +153,10 @@ def classify_cpu_socket(name: str) -> tuple[str | None, str]:
     n = name.strip()
     if n in INTEL_HEDT_OVERRIDE:
         return INTEL_HEDT_OVERRIDE[n], "high"
+    if n in THREADRIPPER_OVERRIDE:
+        return THREADRIPPER_OVERRIDE[n], "high"
+    if n in INTEL_DESKTOP_C_OVERRIDE:
+        return INTEL_DESKTOP_C_OVERRIDE[n], "high"
     if n in CELERON_PENTIUM_G_MAP:
         return CELERON_PENTIUM_G_MAP[n], "high"
     if _INTEL_ULTRA_RE.match(n):

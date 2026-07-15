@@ -22,7 +22,7 @@ import sys
 
 from ..engine.seasonality import compute_seasonality, compute_landing
 from ..engine.chain import reproduce_chain
-from ..ingestion.keisuu import load_keisuu_history, load_keisuu_reference
+from ..ingestion.keisuu import parse_keisuu_history, parse_keisuu_reference
 from ..ingestion.plan1_chain import load_plan_chain
 
 
@@ -35,8 +35,8 @@ def close_enough(a, b, tol=1e-6):
 
 
 def check_seasonality() -> dict:
-    history = load_keisuu_history()
-    ref = load_keisuu_reference()
+    history = parse_keisuu_history()
+    ref = parse_keisuu_reference()
     season = compute_seasonality(history, [37, 38, 39, 40, 41])
     checks = [("過去5期平均", season["avg"], ref["avg"]),
              ("年間構成比", season["share"], ref["share"]),
@@ -57,8 +57,8 @@ def check_seasonality() -> dict:
 
 
 def check_landing() -> dict:
-    history = load_keisuu_history()
-    ref = load_keisuu_reference()
+    history = parse_keisuu_history()
+    ref = parse_keisuu_reference()
     season = compute_seasonality(history, [37, 38, 39, 40, 41])
     landing = compute_landing(history, season["share"], 42)
     rep = landing["as_in_file"]

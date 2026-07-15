@@ -10,10 +10,16 @@ Guardrails (BR-010 — AI proposes, a human decides):
     LLM — everything the table already knows stays deterministic.
   * The LLM may only pick from socket families the table already knows
     (plus "unknown"); an invented family is treated as unknown, never stored.
-  * Confidence is capped at LLM_CONF_CAP (0.65): below the engine's own
-    'medium' (0.7) and far below the review queue's bulk-confirm threshold
-    (0.9), so an LLM draft can NEVER be swept in by bulk-confirm — every one
-    requires an individual human decision.
+  * Confidence is the model's own raw 0.0-1.0 self-assessment, stored as
+    reported — NOT capped below the review queue's bulk-confirm threshold
+    (changed 2026-07-10, by explicit request, after confirming the tradeoff:
+    LLMs are known to be poorly self-calibrated — a wrong answer can report
+    high confidence just as easily as a right one, e.g. the W790 WS
+    misclassification during testing came back "high" — so a confidently
+    wrong LLM draft CAN now be swept in by bulk-confirm without individual
+    review. Every LLM-origin row is still clearly origin='llm' with the
+    model's stated reasoning in `note`, so it's visible to a reviewer who
+    looks; bulk-confirm just no longer forces that look).
   * origin='llm' and the model's stated reasoning are stored on the rule,
     so the reviewer sees WHY the model thinks the part fits that family.
   * Manual-trigger only, degrades gracefully: unreachable model server means
@@ -35,8 +41,6 @@ from ..engine.compat import (CHIPSET_SOCKET, INTEL_GEN_SOCKET,
                              classify_mb_socket)
 from ..models import CompatRule, Item
 
-LLM_CONF_CAP = 0.65
-CONF_MAP = {"high": LLM_CONF_CAP, "medium": 0.5}   # LLM 'low' → not stored
 BATCH_SIZE = 25
 
 
@@ -73,13 +77,26 @@ def _prompt(names: list[str], kind: str, families: list[str]) -> str:
         f"Rules:\n"
         f"- If the part is a laptop/mobile CPU (no desktop socket), or you are "
         f"not confident, use \"unknown\".\n"
-        f"- Never guess a family that is not in the list; use \"unknown\" instead.\n"
-        f"- confidence: \"high\" only when the mapping is standard public "
-        f"engineering knowledge; \"medium\" when inferred; \"low\" when weak.\n"
-        f"- reasoning: one short sentence naming the evidence (e.g. the chipset "
-        f"code or CPU generation you recognized).\n\n"
+        f"- First identify the part's REAL socket/chipset from your own "
+        f"knowledge (e.g. \"LGA1155\" or \"LGA4677\"), THEN check whether "
+        f"that exact name appears in the allowed list below. If it does not "
+        f"appear — even if a similar-looking or nearby-generation family is "
+        f"in the list — you MUST answer \"unknown\". Do NOT substitute the "
+        f"closest or most-similar-sounding family from the list; a wrong "
+        f"answer that looks plausible is worse than admitting you don't "
+        f"know. Example: if the true socket is LGA1155 and only LGA1150 is "
+        f"in the list, answer \"unknown\", not \"LGA1150\".\n"
+        f"- confidence: a NUMBER from 0.0 to 1.0 for how certain you are. "
+        f"1.0 = verified public engineering fact (e.g. a well-documented "
+        f"chipset/socket pairing); 0.5 = a reasonable inference from "
+        f"partial evidence; near 0.0 = a weak guess. Use the full range — "
+        f"do not default to round numbers like 0.5 or 0.9 out of habit; "
+        f"actually estimate how likely you are to be right.\n"
+        f"- reasoning: name the SPECIFIC evidence (the exact chipset code, or "
+        f"the CPU microarchitecture/generation you recognized) — not a vague "
+        f"restatement of the family name.\n\n"
         f"Respond with ONLY a JSON array, no other text:\n"
-        f'[{{"name": "...", "family": "...", "confidence": "high|medium|low", '
+        f'[{{"name": "...", "family": "...", "confidence": 0.0-1.0, '
         f'"reasoning": "..."}}]\n\n'
         f"Names:\n" + "\n".join(f"- {n}" for n in names)
     )
@@ -96,9 +113,11 @@ def _extract_json_array(text: str) -> list:
 
 def classify_with_llm(names: list[str], kind: str,
                       transport=None) -> tuple[dict[str, dict], list[str]]:
-    """→ ({name: {family, confidence_word, reasoning}}, unknown_names).
-    Only names classified into a KNOWN family with high/medium confidence
-    appear in the dict; everything else lands in unknown_names."""
+    """→ ({name: {family, confidence, reasoning}}, unknown_names).
+    Only names classified into a KNOWN family with a valid numeric
+    confidence appear in the dict; everything else lands in unknown_names.
+    confidence is the model's raw 0.0-1.0 self-report, stored as-is — see
+    the module docstring for why this is no longer capped."""
     transport = transport or _default_transport
     families = known_families()
     classified: dict[str, dict] = {}
@@ -125,8 +144,12 @@ def classify_with_llm(names: list[str], kind: str,
                 continue                   # hallucinated or duplicated name
             seen.add(name)
             family = str(row.get("family", "")).strip()
-            conf = str(row.get("confidence", "")).strip().lower()
-            if family in families and conf in CONF_MAP:
+            try:
+                conf = float(row.get("confidence"))
+            except (TypeError, ValueError):
+                conf = None
+            valid_conf = conf is not None and 0.0 <= conf <= 1.0
+            if family in families and valid_conf:
                 classified[name] = {"family": family, "confidence": conf,
                                     "reasoning": str(row.get("reasoning", ""))[:300]}
             else:
@@ -186,7 +209,7 @@ def draft_llm_rules(session, transport=None) -> dict:
     existing = {(r.part_a_id, r.part_b_id, r.relation)
                 for r in session.query(CompatRule).all()}
 
-    def _store(cpu: Item, mb: Item, conf_word: str, reasoning: str,
+    def _store(cpu: Item, mb: Item, confidence: float, reasoning: str,
                llm_part: str) -> None:
         key = (cpu.id, mb.id, "fits")
         if key in existing:
@@ -195,7 +218,7 @@ def draft_llm_rules(session, transport=None) -> dict:
         existing.add(key)
         session.add(CompatRule(
             part_a_id=cpu.id, part_b_id=mb.id, relation="fits",
-            confidence=CONF_MAP[conf_word], origin="llm", status="draft",
+            confidence=confidence, origin="llm", status="draft",
             note=f"[{llm_part}] {reasoning}"))
         result["rules_drafted"] += 1
 
@@ -211,8 +234,7 @@ def draft_llm_rules(session, transport=None) -> dict:
             _store(cpu, mb, cls["confidence"], cls["reasoning"], "mb")
         for cname, ccls in cpu_cls.items():
             if ccls["family"] == cls["family"]:
-                weakest = min(cls["confidence"], ccls["confidence"],
-                              key=lambda c: CONF_MAP[c])
+                weakest = min(cls["confidence"], ccls["confidence"])
                 _store(by_name[cname], mb, weakest,
                        f"cpu: {ccls['reasoning']} / mb: {cls['reasoning']}",
                        "both")

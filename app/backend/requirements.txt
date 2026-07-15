@@ -1,6 +1,12 @@
-fastapi
-uvicorn
-sqlalchemy>=2.0
-openpyxl
-pyxlsb
-pydantic
+fastapi==0.121.0
+uvicorn==0.38.0
+sqlalchemy==2.0.45
+openpyxl==3.1.5
+pyxlsb==1.0.10
+pydantic==2.12.5
+
+# NOT a pip package: ingestion/sap.py's live SAP source (SAP在庫抽出.accdb,
+# an Access DB) is read via the `mdb-export` CLI tool, system-installed:
+#   sudo apt-get install -y mdbtools
+# Falls back to the xlsx-glob source (SAP_STOCK_GLOB) if mdbtools/the accdb
+# is unavailable, so this is a soft dependency, not a hard requirement.

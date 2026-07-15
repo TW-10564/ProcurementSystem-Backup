@@ -14,6 +14,8 @@ it exposes nothing sensitive).
 """
 from __future__ import annotations
 
+import hmac
+
 from fastapi import Header, HTTPException, Request
 
 from ..config import API_KEY
@@ -24,5 +26,5 @@ async def require_api_key(request: Request, x_api_key: str | None = Header(defau
         return
     if request.url.path == "/health":
         return
-    if x_api_key != API_KEY:
+    if x_api_key is None or not hmac.compare_digest(x_api_key, API_KEY):
         raise HTTPException(401, "missing or invalid X-API-Key")

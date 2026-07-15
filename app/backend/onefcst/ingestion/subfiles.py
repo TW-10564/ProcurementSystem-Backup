@@ -1,26 +1,21 @@
 """Sub-file 部品詳細 parser — full monthly 生産計画 series per SKU (level='one_row').
 
-Reuses the PROVEN Phase-0 layouts from consolidation/config_all.py
-(per-file label_col / name_col / first_date_col; 4-row blocks
-生産計画/購買計画/在庫残高/在庫日数). Phase-0 extracted one snapshot column;
-here we capture the whole monthly series for the three-level plan diff.
-Also captures the current 在庫残高/在庫日数 snapshot per SKU.
+Reuses the PROVEN Phase-0 layouts, now copied in-house into
+ingestion/subfile_config.py (per-file label_col / name_col / first_date_col;
+4-row blocks 生産計画/購買計画/在庫残高/在庫日数) — see that module's
+docstring for why this isn't a live import from consolidation/ anymore.
+Phase-0 extracted one snapshot column; here we capture the whole monthly
+series for the three-level plan diff. Also captures the current
+在庫残高/在庫日数 snapshot per SKU.
 """
 from __future__ import annotations
 
-import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
-_CONSOLIDATION = Path(__file__).resolve().parents[4] / "consolidation"
-if str(_CONSOLIDATION) not in sys.path:
-    sys.path.insert(0, str(_CONSOLIDATION))
-
-from config_all import FILES, BLOCK_LABELS, BASE          # noqa: E402
-from consolidate import read_sheet, to_date, to_float     # noqa: E402
-
-from .excel import col_letter                              # noqa: E402
+from .subfile_config import FILES, BLOCK_LABELS, BASE
+from .excel import col_letter, read_dict_rows, to_date, to_float
 
 
 def parse_subfile_series(cat: str, snapshot_date: date | None = None) -> dict:
@@ -49,7 +44,7 @@ def parse_subfile_series(cat: str, snapshot_date: date | None = None) -> dict:
              "expected_skus": cfg["expected_skus"], "note": ""}
 
     try:
-        rows, present, names = read_sheet(path, cfg["fmt"])
+        rows, present, names = read_dict_rows(path, cfg["fmt"], "部品詳細")
     except Exception as e:                                  # pragma: no cover
         stats["note"] = f"READ ERROR: {e}"
         return {"series": [], "stock": [], "stats": stats}

@@ -58,6 +58,119 @@ export interface MismatchGroup {
 export interface MismatchReport {
   month: string;
   groups: MismatchGroup[];
+  confirmed_rule_classifications: { cpu: string[]; mb: string[] };
+}
+
+export interface DiscontinuationCandidate {
+  item_id: number;
+  name: string;
+  category: string | null;
+  lifecycle: string | null;
+  prior_6mo_actual: number;
+  recent_6mo_actual: number;
+  decline_pct: number;
+  next_6mo_forecast: number;
+  method: string | null;
+  marked_no_reorder: boolean | null;
+}
+
+export interface ZeroStockCandidate {
+  item_id: number;
+  name: string;
+  category: string | null;
+  lifecycle: string | null;
+  zero_since: string;
+  latest_snapshot: string;
+  zero_duration_days: number;
+  zero_snapshots_observed: number;
+  next_6mo_forecast: number;
+  marked_no_reorder: boolean | null;
+}
+
+export interface DiscontinuationReport {
+  run_id: number | null;
+  count: number;
+  candidates: DiscontinuationCandidate[];
+  note: string;
+  zero_stock_count: number;
+  zero_stock_candidates: ZeroStockCandidate[];
+  sap_data_depth_days: number;
+  sap_items_with_history: number;
+  zero_stock_note: string;
+}
+
+export interface StockDivergence {
+  item_id: number;
+  name: string;
+  category: string | null;
+  tier: number | null;
+  sap_qty: number;
+  sap_snapshot_date: string | null;
+  one_balance: number;
+  one_snapshot_date: string | null;
+  pct_diff: number;
+  trusted_value: number;
+}
+
+export interface NoSapCoverageItem {
+  item_id: number;
+  name: string;
+  category: string | null;
+  tier: number | null;
+  one_balance: number;
+  trusted_value: number | null;
+  confidence: "one_only_unverified" | "one_only_negative_clamped";
+}
+
+export interface StockReconciliationReport {
+  generated_for_items: number;
+  sap_covered_items: number;
+  divergence_threshold_pct: number;
+  divergences: StockDivergence[];
+  no_sap_coverage: NoSapCoverageItem[];
+  negative_one_balance_clamped: NoSapCoverageItem[];
+  note: string;
+}
+
+export interface RebuildReport {
+  sap_shipments?: { resolved: number; unresolved: number; rows: number };
+  history_preserved?: { actuals: number; adjustments: number; compat_rules: number };
+  gate_a?: { plan_values: number; resolved: number; rate: number; status: string };
+}
+
+export interface RebuildStatus {
+  status: "idle" | "running" | "done" | "error";
+  trigger?: "manual" | "scheduled" | null;
+  started_at: string | null;
+  finished_at: string | null;
+  report: RebuildReport | null;
+  error: string | null;
+}
+
+export interface RebuildHistoryEntry {
+  id: number;
+  trigger: "manual" | "scheduled";
+  status: "running" | "done" | "error";
+  started_at: string;
+  finished_at: string | null;
+  report: RebuildReport | null;
+  error: string | null;
+}
+
+export interface PlanVsActualWeek {
+  week_start: string;
+  month: string;
+  planned_qty: number | null;
+  actual_qty: number | null;
+  variance_pct: number | null;
+  has_adjustment: boolean;
+  is_history: boolean;
+}
+
+export interface PlanVsActual {
+  item_id: number;
+  name: string;
+  weeks: PlanVsActualWeek[];
 }
 
 export interface ForecastRunInfo {
@@ -109,6 +222,7 @@ export interface ForecastRow {
   category: string | null;
   tier: number | null;
   method: string | null;
+  last_active_month: string | null;  // most recent month with real sales; default sort key
   wape: number | null;               // near-term (M+1) WAPE — drives confidence
   wape_full_horizon: number | null;  // 6-month blended WAPE — secondary caveat
   stock: number | null;
@@ -131,6 +245,7 @@ export interface OrderSuggestionRow {
   category: string | null;
   method: string | null;
   stock: number | null;
+  stock_confidence: "sap_verified" | "one_only_unverified" | "one_only_negative_clamped" | "no_data";
   safety_stock: number;
   order_qty: number;
   order_by: string;
@@ -175,7 +290,10 @@ export interface ForecastDetail {
     tier: number | null;
     lifecycle: string | null;
     moq: number | null;
-    lead_time_days: number | null;
+    lead_time_days: number | null;             // 部品マスター's static estimate
+    observed_lead_time_days: number | null;    // real median from completed POs
+    observed_lead_time_samples: number | null;
+    effective_lead_time_days: number | null;   // what order suggestions actually use
     min_stock_days: number | null;
   };
   method: string | null;
@@ -185,7 +303,9 @@ export interface ForecastDetail {
   forecast: ForecastMonth[];
   one_plan: MonthQty[];
   weekly: { week_start: string; qty: number }[];
-  stock: { one_balance: number | null; sap_qty: number | null; snapshot_date: string | null } | null;
+  stock: { one_balance: number | null; sap_qty: number | null;
+           confidence: "sap_verified" | "one_only_unverified" | "one_only_negative_clamped" | "no_data";
+           snapshot_date: string | null } | null;
   suggestion: {
     action: string;
     suggested_qty?: number;

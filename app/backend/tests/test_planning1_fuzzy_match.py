@@ -20,11 +20,21 @@ def session():
     s.close()
 
 
-def test_asrock_prefix_is_stripped_but_other_vendors_are_not():
+def test_mb_vendor_prefix_is_tried_both_stripped_and_raw():
+    """Revised 2026-07-14: no MB vendor reliably keeps or drops its own
+    prefix in 綽名 (0/154 registered items keep "ASUS"/"GIGABYTE"; MSI keeps
+    it for some boards, e.g. "MSI H610M D5", drops it for others, e.g.
+    "Z890" is registered bare) — so every vendor prefix is tried BOTH ways,
+    raw first (most specific / matches when the vendor DOES keep it)."""
     assert "B550M" in candidate_variants("ASR B550M")
     assert "B550M" in candidate_variants("ASRock B550M")
     variants = candidate_variants("MSI H610M D5")
-    assert variants == ["MSI H610M D5"]     # MSI keeps its vendor prefix in 綽名
+    assert variants[0] == "MSI H610M D5"    # raw form tried first
+    assert "H610M D5" in variants           # stripped form also offered
+    variants = candidate_variants("ASUS B860M")
+    assert "B860M" in variants
+    variants = candidate_variants("GIGABYTE B850M")
+    assert "B850M" in variants
 
 
 def test_rtx_prefix_is_stripped_but_rx_is_not():

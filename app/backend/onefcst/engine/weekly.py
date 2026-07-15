@@ -1,28 +1,21 @@
 """Monthly → weekly forecast disaggregation — pure functions, no I/O.
 
-Honest scope: this is NOT an independently-fitted weekly statistical model.
-No weekly-granularity historical actuals are persisted anywhere in the
-pipeline (部品予測 is monthly-only; the procurement team's own SAP管理
-Excel tracks daily/weekly figures but only as a live current snapshot, not
-an archived history to backtest against) — so there is nothing to fit a
-weekly method on yet, and claiming weekly-level accuracy we haven't earned
-would repeat the exact overclaiming mistake this project has spent all
-session correcting for the monthly engine.
+Honest scope: this is NOT an independently-fitted weekly statistical
+model. The forecast itself is still produced and validated at monthly
+grain (engine/baseline.py) — this module only splits an already-validated
+month's forecast across its overlapping calendar weeks, weighted by each
+week's day-overlap with the month (so a week spanning a month boundary
+gets its fair share of each side, not double- or under-counted).
 
-What this DOES do, honestly: split each month's already-validated forecast
-into calendar weeks, weighted by how many of that week's days actually fall
-in the month (so a week spanning a month boundary gets its fair share of
-each side, not double- or under-counted). This matches the real cadence
-this system now runs on — SAP data refreshes every Monday, the procurement
-team's own stock-setting review happens Friday — and it is the necessary
-scaffolding for a future demand-sensing layer, which NEEDS a weekly
-baseline to compare real daily/weekly pace against.
-
-If/when weekly actuals start being archived (e.g. from the scheduler's own
-recurring runs, see scheduler.py), a genuinely weekly-fitted method with
-its own hold-out validation becomes possible — same evolution the monthly
-engine already went through.
-"""
+Updated 2026-07-15: real weekly ACTUALS are now archived (WeeklyActual,
+fed by ingestion/sap_shipments.py's raw per-week SAP shipment data,
+before it gets aggregated into Actual's monthly grain) — see
+forecast_views.plan_vs_actual, which compares this module's disaggregated
+forecast against those real weekly actuals. That comparison is still not
+a weekly-FITTED method (the forecast itself is unchanged, monthly-derived
+math split across weeks) — a genuinely weekly-fitted method with its own
+hold-out validation is future work, now that real weekly history exists
+to validate one against."""
 from __future__ import annotations
 
 from datetime import date, timedelta

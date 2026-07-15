@@ -7,6 +7,7 @@ import Mismatch from "./pages/Mismatch";
 import CompatReview from "./pages/CompatReview";
 import Adjustments from "./pages/Adjustments";
 import Notifications from "./pages/Notifications";
+import Discontinuation from "./pages/Discontinuation";
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
           <Route path="accuracy" element={<Accuracy />} />
           <Route path="mismatch" element={<Mismatch />} />
           <Route path="compat" element={<CompatReview />} />
+          <Route path="discontinuation" element={<Discontinuation />} />
           <Route path="adjustments" element={<Adjustments />} />
           <Route path="notifications" element={<Notifications />} />
         </Route>

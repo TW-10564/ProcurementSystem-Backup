@@ -13,10 +13,13 @@ from __future__ import annotations
 
 from sqlalchemy import func
 
-from ..config import TIER1_CATEGORIES
+from ..config import TIER1_CATEGORIES, ONE_DIR
 from ..db import get_session
 from ..models import Item, ItemAlias
-from ..ingestion import one_master, note_plan, notepc_forecast, planning4
+from ..ingestion import one_master, note_plan, notepc_forecast, planning4, stock_policy
+from ..ingestion import mb_procurement
+from ..ingestion import no_reorder_flag
+from ..ingestion import lead_time as lead_time_mod
 
 
 def _add_alias(session, cache: dict, item_id: int, alias: str, system: str,
@@ -103,10 +106,76 @@ def build_registry() -> dict:
                           for code, votes in bunrui_votes.items()}
     stats["bunrui_categories_recovered"] = len(bunrui_to_category)
 
+    # Cross-system code lookup (found 2026-07-14): a 部品マスター row's OWN
+    # name (row["adana"], e.g. "汎S 組ATX 650W 80+B") is very often a
+    # different string from the SAME part's 部品予測 name (e.g. "B650"), so
+    # by_adana.get(row["adana"]) alone misses it — even though row["code"]
+    # (商品コード) is ALREADY registered as a 汎用コード alias of the real
+    # item from step 1. Without this check, such a row silently created a
+    # second, permanently-empty ghost Item under the 部品マスター spelling
+    # (confirmed: 20 real PSU/CPU/memory pairs, e.g. "B650" vs its ghost
+    # "汎S 組ATX 650W 80+B" — the ghost had zero stock/plan history forever,
+    # while SAP stock and forecasts correctly stayed on the real item; but
+    # the ghost's OWN commercial attributes below — moq/lead_time/suppliers —
+    # were then silently lost, attached to an item nothing ever resolves to).
+    # Built once from step 1/1b's aliases only, not live-updated against
+    # master's own newly-created items — those duplicates are already
+    # handled by the by_adana same-name-repeat path below.
+    code_to_item: dict[str, int] = {alias: iid for (alias, _system), iid in alias_cache.items()}
+
+    # Cross-category name collision (found 2026-07-14): row["adana"] can
+    # coincidentally match an UNRELATED existing item's canonical_name from
+    # a DIFFERENT category — e.g. "P1000" is a real GPU's own name in 部品予測,
+    # but is ALSO ONE's own PSU shorthand ("Platinum 1000W") in a SEPARATE
+    # 部品マスター row (code 194927 = "組ENH ATX-5010GB Rev3(ATX1000w,80+P,
+    # JPcd)", an actual power supply whose own adana field happens to be the
+    # identical string "P1000"). Silently reusing the GPU item here would
+    # misattribute the PSU's own SAP stock/demand onto the GPU's numbers the
+    # day this code ever appears in a SAP extract (confirmed dormant today —
+    # 194927 isn't in the current export — but latent). Keyed by row["code"]
+    # (not row["adana"], which is the ambiguous part) so repeated master rows
+    # for the SAME miscategorized code land on the same disambiguated item.
+    disambiguated_by_code: dict[str, Item] = {}
+
     for row in master_rows:
         item = by_adana.get(row["adana"])
+        recovered_cat = bunrui_to_category.get(row["bunrui"])
+        category_conflict = (item is not None and item.category and recovered_cat
+                             and item.category != recovered_cat
+                             and (item.category in TIER1_CATEGORIES
+                                  or recovered_cat in TIER1_CATEGORIES))
+        if category_conflict:
+            # Before inventing a new item, check whether this code is
+            # ALREADY a known alias of some OTHER (correctly-categorized)
+            # item — found 2026-07-14: code 194927 was both a false name-
+            # match onto the GPU "P1000" (the conflict this branch exists
+            # for) AND already the real PSU "P1000W"'s own 汎用コード from
+            # step 1. Re-splitting into yet another new item would recreate
+            # the exact ghost-duplicate problem code_to_item exists to avoid.
+            other_item_id = code_to_item.get(row["code"])
+            if other_item_id is not None and other_item_id != item.id:
+                item = session.get(Item, other_item_id)
+                by_adana[row["adana"]] = item
+            else:
+                item = disambiguated_by_code.get(row["code"])
+            if item is None:
+                disambiguated_name = f"{row['adana']}#{row['code']}"
+                item = Item(canonical_name=disambiguated_name, kind="part",
+                           category=recovered_cat,
+                           tier=1 if recovered_cat in TIER1_CATEGORIES else 2)
+                session.add(item)
+                session.flush()
+                disambiguated_by_code[row["code"]] = item
+                _add_alias(session, alias_cache, item.id, disambiguated_name, "ONE綽名", stats)
+                stats["master_category_collision_disambiguated"] = (
+                    stats.get("master_category_collision_disambiguated", 0) + 1)
+        elif item is None and row["code"] in code_to_item:
+            item = session.get(Item, code_to_item[row["code"]])
+            by_adana[row["adana"]] = item
+            _add_alias(session, alias_cache, item.id, row["adana"], "商品マスター名", stats)
+            stats["master_code_matched_existing_item"] = (
+                stats.get("master_code_matched_existing_item", 0) + 1)
         if item is None:
-            recovered_cat = bunrui_to_category.get(row["bunrui"])
             item = Item(canonical_name=row["adana"], kind="part",
                        category=recovered_cat,
                        tier=1 if recovered_cat in TIER1_CATEGORIES else 2)
@@ -155,13 +224,114 @@ def build_registry() -> dict:
             item.moq = row["moq"]
 
     # -- 4. planning-name aliases from ④ﾏｽﾀ --------------------------------
+    # Verified 2026-07-09: 7 of 11 previously-unresolved rows here were pure
+    # case/spacing variants of a real 綽名 ("Ry75700G" vs canonical
+    # "ry75700G", "4000 SFF Ada" vs "4000SFFAda") that resolve_any's
+    # normalization fallback already handles everywhere else — this was the
+    # one call site still doing a bare exact-match dict lookup.
+    norm_adana = {_norm_for_crosswalk(a): item for a, item in by_adana.items()}
     for row in planning4.parse_masta_aliases():
         item = by_adana.get(row["one_name"])
+        if item is None:
+            item = norm_adana.get(_norm_for_crosswalk(row["one_name"]))
         if item is None:
             stats["unresolved_plan4"] += 1
             continue
         _add_alias(session, alias_cache, item.id, row["plan_name"], "④企画名前", stats)
         stats["plan4_aliases"] += 1
+
+    # -- 5. category-level min_stock_days fallback (在庫の持ち方) -------------
+    # Only fills items 部品マスター left with no per-item value — never
+    # overrides one. See ingestion/stock_policy.py for the label crosswalk
+    # and which source rows are deliberately skipped.
+    policy_result = stock_policy.parse_stock_policy()
+    policy = policy_result["policy"]
+    filled = 0
+    if policy:
+        for item in by_adana.values():
+            if item.min_stock_days is not None or item.category is None:
+                continue
+            days = policy.get((item.category, item.subcategory))
+            if days is None:
+                days = policy.get((item.category, None))
+            if days is not None:
+                item.min_stock_days = days
+                filled += 1
+    stats["stock_policy_fallback_filled"] = filled
+    stats["stock_policy_source"] = policy_result["source_file"]
+    stats["stock_policy_skipped"] = policy_result["skipped"]
+
+    # -- 6. MB take-or-pay / exclusive-part liability (製品一覧) -------------
+    # ingestion/mb_procurement.py's parser + chipset rollup already existed
+    # and is used at REPORT time by verify/mismatch.py, but was never called
+    # during build — so Item.exclusive_flag/takeorpay_n1/chipset stayed NULL
+    # for every item despite the source data being live. Board-model
+    # granularity is finer than our chipset-level registry items, so this
+    # rolls up by chipset (see mb_procurement's own docstring for why) and
+    # keeps the most severe takeorpay_n1 string seen for that chipset
+    # (あり > 要交渉 > なし) rather than mismatch.py's report-time boolean
+    # collapse, since Item.takeorpay_n1 is a string column.
+    _TAKEORPAY_SEVERITY = {"あり": 2, "要交渉": 1, "なし": 0}
+    liability_rows = mb_procurement.parse_mb_takeorpay(ONE_DIR)
+    chipset_liab: dict[str, dict] = {}
+    for r in liability_rows:
+        if not r["chipset"]:
+            continue
+        agg = chipset_liab.setdefault(r["chipset"], {"exclusive": False, "takeorpay_n1": None})
+        agg["exclusive"] = agg["exclusive"] or r["exclusive"]
+        cand = r["takeorpay_n1"]
+        cur = agg["takeorpay_n1"]
+        if cand and (cur is None or _TAKEORPAY_SEVERITY.get(cand, -1) >
+                     _TAKEORPAY_SEVERITY.get(cur, -1)):
+            agg["takeorpay_n1"] = cand
+
+    mb_liability_filled = 0
+    for item in by_adana.values():
+        if item.category != "ﾏｻﾞｰﾎﾞｰﾄﾞ":
+            continue
+        chipset = mb_procurement._find_chipset(item.canonical_name)
+        if not chipset:
+            continue
+        info = chipset_liab.get(chipset)
+        if info is None:
+            continue
+        item.chipset = chipset
+        item.exclusive_flag = item.exclusive_flag or info["exclusive"]
+        if info["takeorpay_n1"] is not None:
+            item.takeorpay_n1 = info["takeorpay_n1"]
+        mb_liability_filled += 1
+    stats["mb_liability_chipsets"] = len(chipset_liab)
+    stats["mb_liability_items_filled"] = mb_liability_filled
+
+    # -- 7. "won't reorder" gray-cell marking (部品詳細, .xlsx categories only) --
+    # Purchasing's own early-warning signal, ahead of the formal eol_flag —
+    # see ingestion/no_reorder_flag.py's docstring for how this was verified
+    # against real data. Only 6 of 17 categories are readable (.xlsx, not
+    # .xlsb) — items in the other 11 simply never get this flag set, which
+    # is a tooling limitation, not a claim those items are never marked.
+    no_reorder_filled = 0
+    for cat, skus in no_reorder_flag.find_all_no_reorder_skus().items():
+        for sku in skus:
+            item = by_adana.get(sku)
+            if item is not None and not item.marked_no_reorder:
+                item.marked_no_reorder = True
+                no_reorder_filled += 1
+    stats["no_reorder_items_filled"] = no_reorder_filled
+
+    # -- 8. real observed lead time (購買計画 PO history, delivered only) -----
+    # See ingestion/lead_time.py's docstring — this can diverge sharply from
+    # 部品マスター's static lead_time_days; both are kept (never overwrites
+    # lead_time_days), see forecast_views.effective_lead_time for how a
+    # caller picks between them.
+    observed_filled = 0
+    for sku, (median_days, n) in lead_time_mod.compute_observed_lead_times().items():
+        item = by_adana.get(sku)
+        if item is None:
+            continue
+        item.observed_lead_time_days = median_days
+        item.observed_lead_time_samples = n
+        observed_filled += 1
+    stats["observed_lead_time_items_filled"] = observed_filled
 
     session.commit()
     stats["items"] = session.query(func.count(Item.id)).scalar()
@@ -181,6 +351,26 @@ def build_registry() -> dict:
 
     session.close()
     return stats
+
+
+def resolve_via_source(session, name: str, source_system: str) -> Item | None:
+    """Resolve `name` only against aliases from ONE specific source_system —
+    for callers whose own context should outrank resolve()'s generic
+    lowest-alias-id tie-break.
+
+    Real case (2026-07-09): "B650" is both a PSU's own 綽名 (item 899,
+    ONE綽名, added in step 1 — lower id) and a motherboard's officially
+    curated planning nickname (item 575 "B650 TW", ④企画名前, added in step
+    4). resolve() silently picked the PSU for every ①販売計画 row named
+    "ASR B650" (ASR-prefix-stripped to "B650" by planning1.py), routing a
+    Tier-1 motherboard's sales-plan data to an unrelated Tier-2 accessory.
+    ④企画名前 exists SPECIFICALLY to bridge planning-origin names to the
+    right item, so a planning-sourced name should check it first rather
+    than falling through to resolve()'s source-agnostic pick."""
+    row = (session.query(ItemAlias).filter(ItemAlias.alias == name,
+                                           ItemAlias.source_system == source_system)
+          .order_by(ItemAlias.id.asc()).first())
+    return row.item if row else None
 
 
 def resolve(session, name: str) -> Item | None:

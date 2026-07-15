@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, downloadUrl } from "../api/client";
+import { api, downloadReport } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
-import type { BacktestReport, PlannerAccuracy } from "../api/types";
+import type { BacktestReport, PlannerAccuracy, StockReconciliationReport } from "../api/types";
 
 interface FvaReport {
   total_adjustments_recorded: number;
@@ -45,19 +45,16 @@ export default function Accuracy() {
   const [fva, setFva] = useState<FvaReport | null>(null);
   const [rate, setRate] = useState<AdjustmentRate | null>(null);
   const [planner, setPlanner] = useState<PlannerAccuracy | null>(null);
+  const [stockRecon, setStockRecon] = useState<StockReconciliationReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchJson = (url: string) =>
-      fetch(downloadUrl(url)).then((r) => {
-        if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
-        return r.json();
-      });
     const onError = (e: unknown) => setError(String((e as Error).message ?? e));
     api.backtestReport().then(setReport).catch(onError);
-    fetchJson("/reports/fva").then(setFva).catch(onError);
-    fetchJson("/reports/adjustment-rate").then(setRate).catch(onError);
+    api.fvaReport().then(setFva).catch(onError);
+    api.adjustmentRate().then(setRate).catch(onError);
     api.plannerAccuracy().then(setPlanner).catch(onError);
+    api.stockReconciliation().then(setStockRecon).catch(onError);
   }, []);
 
   const maxWape = report
@@ -86,14 +83,14 @@ export default function Accuracy() {
         <p>{t("accuracy_sub")}</p>
         <div className="stats">
           <div className="stat">
-            <div className="lab">{lang === "ja" ? "システム WAPE（同一月比較）" : "System WAPE (matched month)"}</div>
+            <div className="lab">{lang === "ja" ? "システム誤差（同一月比較）" : "System error (matched month)"}</div>
             <div className="val">
               {matched ? matched.system.wape : "—"}
               <small>%</small>
             </div>
           </div>
           <div className="stat">
-            <div className="lab">{lang === "ja" ? "プランナー WAPE（同一月比較）" : "Planner WAPE (matched month)"}</div>
+            <div className="lab">{lang === "ja" ? "プランナー誤差（同一月比較）" : "Planner error (matched month)"}</div>
             <div className="val">
               {matched ? matched.planner.wape : "—"}
               <small>%</small>
@@ -136,8 +133,8 @@ export default function Accuracy() {
                     </span>
                     <span className="c">
                       {lang === "ja"
-                        ? `WAPE差 ・ 対象 ${matched.target_month} ・ ${matched.system.n_skus} SKU`
-                        : `WAPE gap · target ${matched.target_month} · ${matched.system.n_skus} SKUs`}
+                        ? `誤差の差 ・ 対象 ${matched.target_month} ・ ${matched.system.n_skus} SKU`
+                        : `Error gap · target ${matched.target_month} · ${matched.system.n_skus} SKUs`}
                     </span>
                   </div>
                 </div>
@@ -168,7 +165,7 @@ export default function Accuracy() {
                     <div className="statline">
                       <span className="n" style={{ color: "var(--green)" }}>{matched.system.wape}%</span>
                       <span className="c">
-                        WAPE ・ {t("planner_month_lead", { lead: matched.system.lead_time })}
+                        {lang === "ja" ? "誤差" : "Error"} ・ {t("planner_month_lead", { lead: matched.system.lead_time })}
                       </span>
                     </div>
                     <div style={{ marginTop: 8 }}>
@@ -217,7 +214,7 @@ export default function Accuracy() {
                     <div className="statline">
                       <span className="n" style={{ color: "var(--amber)" }}>{matched.planner.wape}%</span>
                       <span className="c">
-                        WAPE ・ {t("planner_month_lead", { lead: matched.planner.lead_time })}
+                        {lang === "ja" ? "誤差" : "Error"} ・ {t("planner_month_lead", { lead: matched.planner.lead_time })}
                       </span>
                     </div>
                     <div style={{ marginTop: 8 }}>
@@ -261,6 +258,9 @@ export default function Accuracy() {
               </div>
             </div>
             <div style={{ padding: "18px 24px", display: "grid", gap: 22 }}>
+              <div className="banner info" style={{ margin: 0 }}>
+                ℹ️ {t("planner_wape_explainer")}
+              </div>
               {/* live tracking status */}
               <div>
                 <div className="eyebrow" style={{ marginBottom: 8 }}>{t("planner_live_title")}</div>
@@ -412,9 +412,9 @@ export default function Accuracy() {
             <h3>{t("fva_title")}</h3>
             <div className="desc">{t("fva_desc")}</div>
           </div>
-          <a className="btn" href={downloadUrl("/export/adjustments")}>
+          <button className="btn" onClick={() => downloadReport("/export/adjustments", "adjustments.xlsx")}>
             {t("fva_download")}
-          </a>
+          </button>
         </div>
         <div style={{ padding: "18px 24px" }}>
           {!fva ? (
@@ -483,9 +483,9 @@ export default function Accuracy() {
                 <h3>{t("accuracy_wape_title")}</h3>
                 <div className="desc">{t("accuracy_wape_desc", { n: report.n_periods })}</div>
               </div>
-              <a className="btn" href={downloadUrl("/export/backtest")}>
+              <button className="btn" onClick={() => downloadReport("/export/backtest", "backtest.xlsx")}>
                 {t("common_download_excel")}
-              </a>
+              </button>
             </div>
             <div style={{ padding: "20px 24px", display: "grid", gap: 18 }}>
               <div>
@@ -553,6 +553,97 @@ export default function Accuracy() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ── SAP vs ONE stock reconciliation ──────────────────────── */}
+      {stockRecon && (
+        <div className="card">
+          <div className="hd">
+            <div>
+              <div className="eyebrow">{t("stockrecon_eyebrow")}</div>
+              <h3>{t("stockrecon_title")}</h3>
+              <div className="desc">{t("stockrecon_desc")}</div>
+            </div>
+          </div>
+          <div style={{ padding: "20px 24px", display: "flex", gap: 32, flexWrap: "wrap" }}>
+            <div>
+              <div className="lab">{t("stockrecon_sap_covered")}</div>
+              <div className="val">
+                {stockRecon.sap_covered_items}/{stockRecon.generated_for_items}
+              </div>
+            </div>
+            <div>
+              <div className="lab">{t("stockrecon_divergences")}</div>
+              <div className="val" style={{ color: stockRecon.divergences.length ? "var(--amber)" : undefined }}>
+                {stockRecon.divergences.length}
+              </div>
+            </div>
+            <div>
+              <div className="lab">{t("stockrecon_no_coverage")}</div>
+              <div className="val" style={{ color: stockRecon.no_sap_coverage.length ? "var(--amber)" : undefined }}>
+                {stockRecon.no_sap_coverage.length}
+              </div>
+            </div>
+          </div>
+
+          {stockRecon.divergences.length > 0 && (
+            <div className="tablewrap" style={{ maxHeight: 320 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t("stockrecon_th_item")}</th>
+                    <th>{t("stockrecon_th_category")}</th>
+                    <th className="num">{t("stockrecon_th_sap")}</th>
+                    <th className="num">{t("stockrecon_th_one")}</th>
+                    <th className="num">{t("stockrecon_th_diff")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stockRecon.divergences.map((d) => (
+                    <tr key={d.item_id}>
+                      <td style={{ fontWeight: 600 }}>{d.name}</td>
+                      <td className="dim">{d.category ?? "—"}</td>
+                      <td className="num mono">{d.sap_qty.toLocaleString()}</td>
+                      <td className="num mono dim">{Math.round(d.one_balance).toLocaleString()}</td>
+                      <td className="num mono" style={{ color: "var(--amber)" }}>
+                        {d.pct_diff}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {stockRecon.no_sap_coverage.length > 0 && (
+            <div className="tablewrap" style={{ maxHeight: 320 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t("stockrecon_th_item")}</th>
+                    <th>{t("stockrecon_th_category")}</th>
+                    <th className="num">{t("stockrecon_th_trusted")}</th>
+                    <th>{t("stockrecon_th_confidence")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stockRecon.no_sap_coverage.map((r) => (
+                    <tr key={r.item_id}>
+                      <td style={{ fontWeight: r.tier === 1 ? 700 : 400 }}>{r.name}</td>
+                      <td className="dim">{r.category ?? "—"}</td>
+                      <td className="num mono">{(r.trusted_value ?? 0).toLocaleString()}</td>
+                      <td className="dim">
+                        {r.confidence === "one_only_negative_clamped"
+                          ? t("stockrecon_confidence_clamped")
+                          : t("stockrecon_confidence_unverified")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

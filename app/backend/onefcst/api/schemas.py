@@ -32,6 +32,13 @@ class RejectRequest(BaseModel):
     reason: str = ""
 
 
+class EditRuleRequest(BaseModel):
+    author: str = Field(..., min_length=1)
+    relation: str | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    note: str | None = None
+
+
 class AdjustmentIn(BaseModel):
     item_id: int
     month: date

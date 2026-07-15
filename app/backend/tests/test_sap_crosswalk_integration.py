@@ -32,8 +32,30 @@ def test_crosswalk_resolves_a_meaningful_number_of_real_items():
     # least a real, resolvable item (never an invented one).
     originals = {original for _, original in load_crosswalk_tokens(latest_crosswalk_file())}
     session = get_session()
-    crosswalk_shaped = [n for n in result["rows"] if n in originals]
+    names = {row["adana"] for row in result["rows"] if row["adana"]}
+    crosswalk_shaped = [n for n in names if n in originals]
     assert crosswalk_shaped, "no crosswalk-shaped names ended up in resolved rows at all"
     for name in crosswalk_shaped:
         assert resolve(session, name) is not None, f"crosswalk-shaped match {name!r} isn't a real item"
     session.close()
+
+
+def test_syocode_resolves_rows_the_crosswalk_alone_could_not():
+    # SYOCODE lines up with 商品コード (ItemAlias.source_system="商品コード"),
+    # already populated by registry/build.py — verified 2026-07-09 against
+    # the real 260629在庫.xlsx: SYOCODE alone resolves ~152/368 blank-あだ名
+    # rows, well beyond the ~41/368 the SYONAME crosswalk recovers. This just
+    # guards that SYOCODE resolution via resolve() still recovers *some*
+    # rows the crosswalk left unresolved — not an exact count (the real
+    # files change week to week).
+    result = sap.parse_sap_stock()
+    session = get_session()
+    # rows still unnamed after sap.py's own crosswalk pass (see sap.py:
+    # "adana" is set to the crosswalk name when the raw あだ名 was blank)
+    still_blank = [row for row in result["rows"] if row["syocode"] and not row["adana"]]
+    if not still_blank:
+        session.close()
+        pytest.skip("no blank-あだ名 rows with a SYOCODE in the current SAP file")
+    syocode_resolved = sum(1 for row in still_blank if resolve(session, row["syocode"]) is not None)
+    session.close()
+    assert syocode_resolved > 0

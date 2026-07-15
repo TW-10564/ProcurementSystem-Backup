@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, downloadUrl } from "../api/client";
+import { api, downloadReport } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 import type { Adjustment } from "../api/types";
 
@@ -259,9 +259,9 @@ export default function Adjustments() {
                 <span className="n">{authorCount}</span>
                 <span className="c">{lang === "ja" ? "担当者" : "authors"}</span>
               </div>
-              <a className="btn" href={downloadUrl("/export/adjustments")}>
+              <button className="btn" onClick={() => downloadReport("/export/adjustments", "adjustments.xlsx")}>
                 {t("common_download_excel")}
-              </a>
+              </button>
             </div>
           </div>
           {list.length === 0 ? (

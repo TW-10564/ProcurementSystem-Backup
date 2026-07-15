@@ -8,18 +8,14 @@ from datetime import date, datetime
 
 from .config import ONE_MASTER, NOTE_ONE_MASTER, planning_file
 from .db import init_db, get_session, engine
-from .models import Base, Snapshot, PlanValue, StockState, Actual, Item
-from .ingestion import one_master, notepc_forecast, planning4, planning1, subfiles, sap
+from .models import Base, Snapshot, PlanValue, StockState, Actual, WeeklyActual, Item
+from .ingestion import one_master, notepc_forecast, planning4, planning1, subfiles, sap, sap_shipments
 from .ingestion.excel import file_meta
-from .registry.build import (build_registry, resolve,
+from .ingestion.subfile_config import FILES as SUBFILE_CFG, BASE as SUBFILE_BASE
+from .registry.build import (build_registry, resolve, resolve_via_source,
                              build_normalized_alias_index, resolve_any)
 
-import sys
 from pathlib import Path as _Path
-_CONSOLIDATION = _Path(__file__).resolve().parents[3] / "consolidation"
-if str(_CONSOLIDATION) not in sys.path:
-    sys.path.insert(0, str(_CONSOLIDATION))
-from config_all import FILES as SUBFILE_CFG, BASE as SUBFILE_BASE   # noqa: E402
 
 
 def _snapshot(session, path, sheet, rows, status, note=""):
@@ -37,9 +33,16 @@ def _resolve_planning1(session, norm_index, name):
     ingestion/planning1.candidate_variants) via the standard resolve_any
     (exact, then normalized) before giving up. Returns (item, used_variant)
     — used_variant lets the caller report how many resolutions needed a
-    variant vs matched as-is (exact or normalized alone)."""
+    variant vs matched as-is (exact or normalized alone).
+
+    ④企画名前 checked first for each variant too, not just the un-stripped
+    original — the real "B650" collision (see resolve_via_source) is only
+    reachable through this loop: "ASR B650" isn't itself an alias anywhere,
+    it's candidate_variants() stripping "ASR" that produces the exact
+    string "B650" that then collides across two items."""
     for variant in planning1.candidate_variants(name):
-        item = resolve_any(session, norm_index, variant)
+        item = (resolve_via_source(session, variant, "④企画名前")
+                or resolve_any(session, norm_index, variant))
         if item is not None:
             return item, (variant != name)
     return None, False
@@ -51,7 +54,11 @@ def _ingest_plan_rows(session, norm_index, snap, rows, level, resolved_counter):
     for p in rows:
         name = p.get("raw_name") or p.get("adana")
         if level == "planning1":
-            item = resolve(session, name)
+            # ④企画名前 (the curated planning-name bridge) checked first, not
+            # resolve()'s source-agnostic pick — see resolve_via_source's
+            # docstring for the real "B650" PSU-vs-motherboard collision
+            # this avoids.
+            item = resolve_via_source(session, name, "④企画名前") or resolve(session, name)
             if item is None:
                 item, _ = _resolve_planning1(session, norm_index, name)
                 if item is not None:
@@ -75,8 +82,105 @@ def _ingest_plan_rows(session, norm_index, snap, rows, level, resolved_counter):
     return unresolved
 
 
+def _resolve_shipment_row(session, norm_index, row):
+    """name_a (読みかえ output) first, name_b (raw SAP code) fallback —
+    see ingestion/sap_shipments.py's module docstring."""
+    item = None
+    if row["name_a"] and row["name_a"] != "該当無し":
+        item = resolve_any(session, norm_index, row["name_a"])
+    if item is None and row["name_b"]:
+        item = resolve_any(session, norm_index, str(row["name_b"]))
+    return item
+
+
+def _ingest_sap_shipments(session, norm_index, agg_rows, weekly_rows=None) -> dict:
+    """Resolves each aggregated shipment row and writes one Actual row per
+    (item, month) — plus, when weekly_rows is given (name_a/name_b-aligned
+    with agg_rows, one row per item, see sap_shipments.flatten_weekly), one
+    WeeklyActual row per (item, week) for the plan-vs-actual weekly
+    comparison view. Extracted from run() for direct unit testing
+    (build.run() itself needs live NAS access — see _resolve_planning1/
+    _ingest_plan_rows above for the same pattern).
+
+    Found live 2026-07-15 against the real sheet: TWO DISTINCT rows can
+    legitimately resolve to the SAME catalog item — e.g. 'RX7600XT' (name_a
+    exact match) and a separate '該当無し'/'RX7600XT' row (name_b fallback
+    match) both resolved to item 827. That's real: the source sheet tracks
+    some parts across more than one line (different brand/channel), and
+    both lines' shipped quantity is real demand for the one item we track.
+    Summing by (item_id, month) / (item_id, week_start) BEFORE writing is
+    required — inserting one row per source row would violate Actual's/
+    WeeklyActual's own (item_id, month-or-week, source) uniqueness the
+    moment two rows collide like this, taking down the entire rebuild over
+    what is actually correct, summable data."""
+    resolved, unresolved = 0, 0
+    monthly_totals: dict[tuple[int, object], float] = {}
+    weekly_totals: dict[tuple[int, object], float] = {}
+    weekly_rows = weekly_rows or [None] * len(agg_rows)
+    for row, wrow in zip(agg_rows, weekly_rows):
+        item = _resolve_shipment_row(session, norm_index, row)
+        if item is None:
+            unresolved += 1
+            continue
+        resolved += 1
+        for month, qty in row["months"].items():
+            key = (item.id, month)
+            monthly_totals[key] = monthly_totals.get(key, 0.0) + qty
+        if wrow is not None:
+            for week_start, qty in wrow["weeks"].items():
+                key = (item.id, week_start)
+                weekly_totals[key] = weekly_totals.get(key, 0.0) + qty
+
+    for (item_id, month), qty in monthly_totals.items():
+        session.add(Actual(item_id=item_id, month=month, qty=qty, source="SAP"))
+    for (item_id, week_start), qty in weekly_totals.items():
+        session.add(WeeklyActual(item_id=item_id, week_start=week_start,
+                                 qty=qty, source="SAP"))
+    return {"resolved": resolved, "unresolved": unresolved}
+
+
+class RequiredSourceUnreachable(Exception):
+    """Raised by _check_required_sources when one or more mandatory NAS
+    inputs can't be read — before run() has touched the DB at all."""
+
+
+def _check_required_sources() -> None:
+    """Verify every source run() cannot proceed without is actually
+    reachable, BEFORE Base.metadata.drop_all() runs.
+
+    Found live 2026-07-15 (twice, in the same session): the NAS mount
+    being unreachable (no `Z:` drive / `/mnt/z` mounted) was previously
+    only discovered deep inside one_master.parse_parts_forecast() or
+    planning_file()'s own FileNotFoundError — AFTER drop_all() had
+    already destroyed every table, including all of rebuild_preserving.py's
+    human-entered data (Adjustment/CompatRule/Actual/WeeklyActual/etc,
+    which that module exists specifically to protect ACROSS a successful
+    rebuild — it does nothing for a rebuild that never gets that far).
+    Checking reachability first means a missing/unmounted NAS fails loud
+    and immediate, with the existing DB completely untouched — the
+    now-familiar rule "never let a partial/failed operation destroy more
+    than it accomplishes" (matches the rebuild-safe-persistence design
+    intent in PILOT_DEPLOY_PLAN.md's blocker #1)."""
+    missing = []
+    if not ONE_MASTER.exists():
+        missing.append(str(ONE_MASTER))
+    if not NOTE_ONE_MASTER.exists():
+        missing.append(str(NOTE_ONE_MASTER))
+    for prefix in ("④", "①"):
+        try:
+            planning_file(prefix)
+        except FileNotFoundError as e:
+            missing.append(str(e))
+    if missing:
+        raise RequiredSourceUnreachable(
+            "Required NAS source(s) unreachable — aborting before touching "
+            "the database (nothing was dropped or modified):\n  " +
+            "\n  ".join(missing))
+
+
 def run() -> dict:
     print(f"=== onefcst M1 build  {datetime.now():%Y-%m-%d %H:%M} ===")
+    _check_required_sources()
     Base.metadata.drop_all(engine)       # POC: full rebuild each run
     init_db()
 
@@ -92,6 +196,16 @@ def run() -> dict:
           f"master-attr hits={stats['master_attr_hits']}  "
           f"note models={stats['note_models']}  "
           f"④aliases={stats['plan4_aliases']} (unresolved {stats['unresolved_plan4']})")
+    if stats.get("stock_policy_source"):
+        print(f"[在庫の持ち方] source={stats['stock_policy_source'].split('/')[-1]}  "
+              f"min_stock_days filled={stats['stock_policy_fallback_filled']}"
+              f"  skipped labels={stats['stock_policy_skipped']}")
+    else:
+        print("[在庫の持ち方] no policy file found (glob miss) — skipped, non-blocking")
+    print(f"[no-reorder flag] gray-cell marking read from 6 .xlsx categories  "
+          f"items flagged={stats['no_reorder_items_filled']}")
+    print(f"[lead time] real observed order→delivery median (購買計画, "
+          f"delivered POs, >=3 samples)  items filled={stats['observed_lead_time_items_filled']}")
 
     session = get_session()
     resolved_counter: dict[str, tuple] = {}
@@ -182,31 +296,95 @@ def run() -> dict:
     sap_result = sap.parse_sap_stock()
     report["sap"] = {"path": str(sap_result["path"]) if sap_result["path"] else None,
                      "matched": 0, "rows": len(sap_result["rows"]),
-                     "unnamed": sap_result["unnamed"],
                      "resolved_via_crosswalk": sap_result["resolved_via_crosswalk"]}
     if sap_result["path"]:
+        # SYOCODE is the primary resolution key (standardized 2026-07-09 —
+        # see ingestion/sap.py docstring): it lines up with 商品コード
+        # ItemAlias rows already in the registry, and resolves more blank-
+        # あだ名 rows than the SYONAME crosswalk alone. あだ名 is the fallback
+        # for rows whose SYOCODE isn't itself a known 商品コード. Aggregation
+        # happens here (by resolved item), not in sap.py, since two raw rows
+        # with different あだ名 spellings can resolve to the same item.
+        agg: dict = {}
+        matched_via_syocode = 0
+        matched_via_adana = 0
+        unnamed = 0
+        for row in sap_result["rows"]:
+            item = None
+            if row["syocode"]:
+                item = resolve_any(session, norm_index, row["syocode"])
+                if item is not None:
+                    matched_via_syocode += 1
+            if item is None and row["adana"]:
+                item = resolve_any(session, norm_index, row["adana"])
+                if item is not None:
+                    matched_via_adana += 1
+            if item is None:
+                unnamed += 1
+            key = item.id if item is not None else ("unresolved", row["adana"] or row["syocode"])
+            entry = agg.setdefault(key, {"item": item,
+                                         "raw_name": row["adana"] or row["syocode"] or "?",
+                                         "qty": 0.0})
+            entry["qty"] += row["qty"]
         matched = 0
-        matched_via_normalization = 0
-        for adana, qty in sap_result["rows"].items():
-            exact_hit = resolve(session, adana) is not None
-            # FIX_PLAN M3: exact-string resolve() leaves a row unmatched
-            # when the あだ名 (direct or crosswalk-recovered) differs from
-            # the stored ONE alias only by width/spacing/hyphenation.
-            item = resolve_any(session, norm_index, adana)
-            if item is not None and not exact_hit:
-                matched_via_normalization += 1
-            if item:
+        for entry in agg.values():
+            item = entry["item"]
+            if item is not None:
                 matched += 1
-            session.add(StockState(item_id=item.id if item else None, raw_name=adana,
-                                   snapshot_date=sap_result["month"], sap_qty=qty))
+            session.add(StockState(item_id=item.id if item else None, raw_name=entry["raw_name"],
+                                   snapshot_date=sap_result["as_of_date"], sap_qty=entry["qty"]))
         report["sap"]["matched"] = matched
-        report["sap"]["matched_via_normalization"] = matched_via_normalization
-        print(f"[SAP] file={sap_result['path'].name}  あだ名={len(sap_result['rows'])}  "
-              f"matched={matched} (of which {matched_via_normalization} via "
-              f"width/spacing normalization)  unnamed_rows={sap_result['unnamed']}  "
+        report["sap"]["matched_via_syocode"] = matched_via_syocode
+        report["sap"]["matched_via_adana"] = matched_via_adana
+        report["sap"]["unnamed"] = unnamed
+        print(f"[SAP] file={sap_result['path'].name}  rows={len(sap_result['rows'])}  "
+              f"resolved_items={matched}/{len(agg)} (via SYOCODE={matched_via_syocode}, "
+              f"via あだ名={matched_via_adana})  unnamed_rows={unnamed}  "
               f"resolved_via_name_crosswalk={sap_result['resolved_via_crosswalk']}")
     else:
         print("[SAP] no stock file found (glob miss) — skipped, non-blocking for M1")
+
+    # 6b. SAP shipments (実売実績) → Actual — found 2026-07-15: the Actual
+    # table (real per-item sales, read by FVA scoring and the Forecast
+    # page's recency sort) had ZERO rows in the live DB before this step;
+    # nothing had ever written to it. See ingestion/sap_shipments.py.
+    #
+    # Wrapped defensively (found live 2026-07-15, first real run against
+    # unfiltered NAS data: an IntegrityError here — since fixed — crashed
+    # the ENTIRE rebuild, discarding the master/④/①/sub-file/SAP-stock
+    # work already done in this same uncommitted session, since run()
+    # commits once at the end. This is genuinely optional/best-effort
+    # data (same tier as the SAP stock file's own "missing = skip,
+    # non-blocking" handling above) — a problem specific to this newest,
+    # least-proven ingestion path must not be able to take the whole
+    # rebuild down with it.
+    report["sap_shipments"] = {"path": None, "rows": 0, "resolved": 0, "unresolved": 0}
+    try:
+        # SAVEPOINT, not a bare try/except: on failure this must roll back
+        # ONLY this step's own writes, not the master/④/①/sub-file/SAP-
+        # stock work already staged (uncommitted) earlier in this same
+        # session — a plain session.rollback() here would discard ALL of
+        # that too, since run() commits the whole session once at the end.
+        with session.begin_nested():
+            shipments = sap_shipments.parse_sap_shipments()
+            if shipments:
+                agg_rows = sap_shipments.aggregate_by_month(shipments)
+                weekly_rows = sap_shipments.flatten_weekly(shipments)
+                ship_stats = _ingest_sap_shipments(session, norm_index, agg_rows, weekly_rows)
+                report["sap_shipments"] = {
+                    "path": str(shipments["path"]), "rows": len(agg_rows), **ship_stats,
+                    "week_ending_dates": [d.isoformat() for d in shipments["week_ending_dates"]],
+                }
+                print(f"[SAP shipments] file={shipments['path'].name}  "
+                      f"weeks={shipments['week_ending_dates'][0]}→{shipments['week_ending_dates'][-1]}  "
+                      f"items={len(agg_rows)}  resolved={ship_stats['resolved']}  "
+                      f"unresolved={ship_stats['unresolved']}")
+            else:
+                print("[SAP shipments] no 部材利用(出荷) sheet found — skipped, non-blocking for M1")
+    except Exception as e:                          # noqa: BLE001
+        report["sap_shipments"] = {"path": None, "rows": 0, "resolved": 0, "unresolved": 0,
+                                   "error": repr(e)}
+        print(f"[SAP shipments] FAILED, skipping non-blocking: {e!r}")
 
     session.commit()
 
