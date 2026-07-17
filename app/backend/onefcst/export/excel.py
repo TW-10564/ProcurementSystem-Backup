@@ -158,11 +158,11 @@ def export_forecasts() -> Path:
     ws.append([])
     month_cols = [m[:7] for m in data["months"]]
     _header(ws, ["部材（綽名）", "カテゴリ", "手法", "検証WAPE(%)", "現在庫",
-                 "12か月合計", "発注提案数量", "発注期限"] + month_cols)
+                 "6か月合計", "発注提案数量", "発注期限"] + month_cols)
     for r in data["rows"]:
         order = r.get("order") or {}
         ws.append([r["name"], r["category"] or "", r["method"] or "",
-                   r["wape"], r["stock"], r["next12_total"],
+                   r["wape"], r["stock"], r["next6_total"],
                    order.get("qty"), (order.get("order_by") or "")[:7]]
                   + [q for q in r["qty"]])
     _autosize(ws, (22, 14, 10, 12, 10, 12, 12, 12))

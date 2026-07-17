@@ -134,20 +134,36 @@ def draft_spec_heuristic_rules(session) -> dict:
 
 
 def list_rules(session, status: str | None = None, min_confidence: float | None = None,
-               limit: int = 200) -> list[CompatRule]:
+               limit: int = 200, exclude_origin: str | None = None) -> list[CompatRule]:
     q = session.query(CompatRule)
     if status:
         q = q.filter(CompatRule.status == status)
     if min_confidence is not None:
         q = q.filter(CompatRule.confidence >= min_confidence)
+    if exclude_origin is not None:
+        q = q.filter(CompatRule.origin != exclude_origin)
     return q.order_by(CompatRule.confidence.desc()).limit(limit).all()
 
 
 def bulk_confirm_high_confidence(session, author: str, threshold: float = 0.9) -> int:
     """Convenience for the review queue's fast path: confirm every draft rule
     at/above `threshold` in one action, still fully logged (one audit entry
-    per rule — no silent bulk state changes)."""
-    rules = list_rules(session, status="draft", min_confidence=threshold)
+    per rule — no silent bulk state changes).
+
+    Excludes origin='llm' entirely (2026-07-17, found live: all 46 existing
+    LLM-drafted rules report confidence=1.0 with zero variation, despite the
+    prompt explicitly telling the model to use the full range — a model
+    calibration failure, not a code bug; see llm_rules.py's own docstring,
+    which already documents a past confidently-wrong LLM misclassification.
+    A confidence value that never varies gives bulk-confirm nothing to
+    threshold on, so every LLM draft was passing regardless of how
+    trustworthy the classification actually was. LLM-origin drafts now only
+    leave 'draft' status via individual confirm/reject in the review queue,
+    where the model's stated reasoning (note field) is visible before
+    deciding — the deterministic ai_spec_heuristic path (confidence capped
+    at 0.95/0.7/0.4, not a raw LLM self-report) is unaffected."""
+    rules = list_rules(session, status="draft", min_confidence=threshold,
+                       exclude_origin="llm")
     for r in rules:
         confirm_rule(session, r.id, author)
     return len(rules)

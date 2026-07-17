@@ -89,6 +89,7 @@ def generate_tier2(session, run, series: dict[int, dict[date, float]],
     forecasted = 0
     skipped_stale = 0
     skipped_no_rate = 0
+    skipped_discontinued = 0
     scored = []
     forecasted_ids: set[int] = set()
     for item_id, obs in series.items():
@@ -96,6 +97,9 @@ def generate_tier2(session, run, series: dict[int, dict[date, float]],
             continue
         item = items.get(item_id)
         if item is None or item.category in TIER1_CATEGORIES:
+            continue
+        if item.eol_flag:
+            skipped_discontinued += 1
             continue
         if len(obs) < MIN_HISTORY_MONTHS:
             continue
@@ -148,6 +152,7 @@ def generate_tier2(session, run, series: dict[int, dict[date, float]],
     item_summary = {"items_forecasted": forecasted,
                     "items_skipped_stale": skipped_stale,
                     "items_skipped_no_attach_rate": skipped_no_rate,
+                    "items_skipped_discontinued": skipped_discontinued,
                     "holdout": {"overall": agg(scored),
                                "note": "attach-rate-only error, isolated from Tier-1's "
                                        "own forecast error (separately ~11% at category "
@@ -182,6 +187,8 @@ def generate_category_fallback(session, run, series: dict[int, dict[date, float]
     for item_id, obs in series.items():
         item = items.get(item_id)
         if item is None or item.category is None or item.category in TIER1_CATEGORIES:
+            continue
+        if item.eol_flag:
             continue
         if not obs:
             continue
@@ -224,10 +231,14 @@ def generate_category_fallback(session, run, series: dict[int, dict[date, float]
     forecasted = 0
     skipped_no_category_rate = 0
     skipped_no_real_signal = 0
+    skipped_discontinued = 0
     for item_id, item in items.items():
         if item_id in already_handled or item_id in series:
             continue
         if item.category is None or item.category in TIER1_CATEGORIES:
+            continue
+        if item.eol_flag:
+            skipped_discontinued += 1
             continue
         if item_id not in ids_with_stock and item_id not in ids_with_actual:
             skipped_no_real_signal += 1
@@ -250,6 +261,7 @@ def generate_category_fallback(session, run, series: dict[int, dict[date, float]
     return {"items_forecasted": forecasted,
            "items_skipped_no_category_rate": skipped_no_category_rate,
            "items_skipped_no_real_signal": skipped_no_real_signal,
+           "items_skipped_discontinued": skipped_discontinued,
            "categories_with_a_rate": len(category_rates),
            "leave_one_out_wape": loo_wape,
            "note": "leave_one_out_wape answers 'if a category member with real "

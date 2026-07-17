@@ -295,7 +295,7 @@ def _is_unactionable_estimate(method: str | None, stock: StockState | None) -> b
     Found 2026-07-08: every one of these items structurally can never
     produce an order suggestion (_suggestion requires a stock balance to
     project from) — the forecast number exists but nothing procurement can
-    act on ever attaches to it. Rolling it into the headline next3/next12
+    act on ever attaches to it. Rolling it into the headline next3/next6
     totals overstates what's actually plannable; it's excluded there but
     still fully visible per-item in list_forecasts/item_detail, and counted
     separately here so it isn't silently dropped."""
@@ -317,14 +317,14 @@ def summary(session) -> dict:
     orders_needed = 0
     excluded_items = 0
     excluded_next3 = 0.0
-    excluded_next12 = 0.0
+    excluded_next6 = 0.0
     for item_id, rows in by_item.items():
         item = items.get(item_id)
         if item is None:
             continue
         cat = item.category or "（未分類）"
         c = cats.setdefault(cat, {"category": cat, "items": 0,
-                                  "next3_total": 0.0, "next12_total": 0.0,
+                                  "next3_total": 0.0, "next6_total": 0.0,
                                   "no_stock_tracking_items": 0})
         c["items"] += 1
         months = [_as_date(f.month) for f in rows]
@@ -336,10 +336,10 @@ def summary(session) -> dict:
             c["no_stock_tracking_items"] += 1
             excluded_items += 1
             excluded_next3 += sum(qtys[:3])
-            excluded_next12 += sum(qtys[:12])
+            excluded_next6 += sum(qtys[:6])
         else:
             c["next3_total"] += sum(qtys[:3])
-            c["next12_total"] += sum(qtys[:12])
+            c["next6_total"] += sum(qtys[:6])
 
         sugg = _suggestion(item, stock, qtys)
         if sugg and sugg["action"] == "suggest_order":
@@ -347,12 +347,12 @@ def summary(session) -> dict:
 
     for c in cats.values():
         c["next3_total"] = round(c["next3_total"])
-        c["next12_total"] = round(c["next12_total"])
+        c["next6_total"] = round(c["next6_total"])
     return {"run": _run_info(run), "orders_needed": orders_needed,
-            "categories": sorted(cats.values(), key=lambda c: -c["next12_total"]),
+            "categories": sorted(cats.values(), key=lambda c: -c["next6_total"]),
             "excluded_no_stock_tracking": {"items": excluded_items,
                                            "next3_total": round(excluded_next3),
-                                           "next12_total": round(excluded_next12)}}
+                                           "next6_total": round(excluded_next6)}}
 
 
 def order_suggestions(session) -> dict:
@@ -392,6 +392,8 @@ def order_suggestions(session) -> dict:
             "order_qty": sugg["suggested_qty"],
             "order_by": months[sugg["order_by_month_index"]],
             "breach_month": months[sugg["breach_month_index"]],
+            "moq_excessive": sugg.get("moq_excessive", False),
+            "moq_months_of_cover": sugg.get("moq_months_of_cover"),
         })
     rows.sort(key=lambda r: (r["order_by"], -r["order_qty"]))
 
@@ -476,7 +478,7 @@ def list_forecasts(session, q: str = "", category: str | None = None,
             "wape_full_horizon": round(wape_full, 1) if wape_full is not None else None,
             "stock": (stock.sap_qty if stock and stock.sap_qty is not None
                       else stock.one_balance if stock else None),
-            "qty": qtys, "next12_total": round(sum(qtys[:12])),
+            "qty": qtys, "next6_total": round(sum(qtys[:6])),
             "has_adjustment": bool(adj_detail),
             "order": ({"qty": sugg["suggested_qty"],
                        "order_by": months[sugg["order_by_month_index"]]}
@@ -488,8 +490,8 @@ def list_forecasts(session, q: str = "", category: str | None = None,
     def _sort_key(r):
         m = r["last_active_month"]
         if m is None:
-            return (1, 0, -r["next12_total"])
-        return (0, -date.fromisoformat(m).toordinal(), -r["next12_total"])
+            return (1, 0, -r["next6_total"])
+        return (0, -date.fromisoformat(m).toordinal(), -r["next6_total"])
     rows.sort(key=_sort_key)
     return {"run": _run_info(run), "total": len(rows), "months": months,
             "rows": rows[offset:offset + limit]}

@@ -355,12 +355,32 @@ def apply_known_plan(rows: list[tuple[date, float]],
                           if rows and m < rows[0][0] and v and v > 0)
     recent_level = (statistics.median(v for _, v in recent_sorted[-12:])
                     if recent_sorted else None)
+
+    # Cross-check against the OTHER known months in this SAME forecast
+    # window (added 2026-07-17, found via real-SKU audit): a genuine
+    # sustained ramp — every known month agreeing on a new, higher level —
+    # was being rejected wholesale just because recent_level (anchored to
+    # OLD history, sometimes across a data gap of a year+) hadn't caught
+    # up yet. Real corruption (the documented chain-formula bug) shows as
+    # ONE month exploding while its neighbors stay normal — an isolated
+    # spike, not multi-month agreement. window_level is the median of every
+    # OTHER known month in `rows`' own span; a value close to ITS OWN
+    # window peers is real regardless of how far it sits from ancient
+    # history, and is only rejected as corrupt when it disagrees with both
+    # recent_level AND its own window peers.
+    known_in_window = {m: obs[m] for m, _ in rows if m in obs and obs[m] and obs[m] > 0}
+
     out = []
     n_overridden = 0
     for m, v in rows:
         known = obs.get(m)
+        window_peers = [kv for km, kv in known_in_window.items() if km != m]
+        window_level = statistics.median(window_peers) if window_peers else None
+        agrees_with_window = (known is not None and window_level is not None
+                              and known <= window_level * KNOWN_PLAN_OUTLIER_MULTIPLE)
         is_corrupt = (known is not None and recent_level
-                     and known > recent_level * KNOWN_PLAN_OUTLIER_MULTIPLE)
+                     and known > recent_level * KNOWN_PLAN_OUTLIER_MULTIPLE
+                     and not agrees_with_window)
         if known is not None and not is_corrupt:
             out.append((m, known))
             n_overridden += 1
@@ -417,7 +437,7 @@ def apply_discontinuation_signal(rows: list[tuple[date, float]],
 
 
 def make_forecast(obs: dict[date, float], start_month: date,
-                  horizon: int = 12) -> tuple[list[tuple[date, float]], str] | None:
+                  horizon: int = 6) -> tuple[list[tuple[date, float]], str] | None:
     """Full pipeline for one SKU: pick the method that won this SKU's
     hold-out (DEFAULT_METHOD when no hold-out is possible), forecast the
     full window with it, then let any already-known future plan value

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, downloadReport } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
-import type { BacktestReport, PlannerAccuracy, StockReconciliationReport } from "../api/types";
+import type { BacktestReport, PlannerAccuracy, SalesReconciliationReport, StockReconciliationReport } from "../api/types";
 
 interface FvaReport {
   total_adjustments_recorded: number;
@@ -46,6 +46,7 @@ export default function Accuracy() {
   const [rate, setRate] = useState<AdjustmentRate | null>(null);
   const [planner, setPlanner] = useState<PlannerAccuracy | null>(null);
   const [stockRecon, setStockRecon] = useState<StockReconciliationReport | null>(null);
+  const [salesRecon, setSalesRecon] = useState<SalesReconciliationReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -55,6 +56,7 @@ export default function Accuracy() {
     api.adjustmentRate().then(setRate).catch(onError);
     api.plannerAccuracy().then(setPlanner).catch(onError);
     api.stockReconciliation().then(setStockRecon).catch(onError);
+    api.salesReconciliation().then(setSalesRecon).catch(onError);
   }, []);
 
   const maxWape = report
@@ -636,6 +638,76 @@ export default function Accuracy() {
                         {r.confidence === "one_only_negative_clamped"
                           ? t("stockrecon_confidence_clamped")
                           : t("stockrecon_confidence_unverified")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ONE (closed month) vs SAP sales reconciliation ─────────── */}
+      {salesRecon && (
+        <div className="card">
+          <div className="hd">
+            <div>
+              <div className="eyebrow">{t("salesrecon_eyebrow")}</div>
+              <h3>{t("salesrecon_title")}</h3>
+              <div className="desc">{t("salesrecon_desc")}</div>
+            </div>
+          </div>
+          <div style={{ padding: "20px 24px", display: "flex", gap: 32, flexWrap: "wrap" }}>
+            <div>
+              <div className="lab">{t("salesrecon_compared")}</div>
+              <div className="val">{salesRecon.compared_item_months}</div>
+            </div>
+            <div>
+              <div className="lab">{t("salesrecon_divergences")}</div>
+              <div className="val" style={{ color: salesRecon.divergences.length ? "var(--amber)" : undefined }}>
+                {salesRecon.divergences.length}
+              </div>
+            </div>
+            <div>
+              <div className="lab">{t("salesrecon_months")}</div>
+              <div className="val mono" style={{ fontSize: "0.95rem" }}>
+                {salesRecon.overlap_months.length > 0 ? salesRecon.overlap_months.join(", ") : "—"}
+              </div>
+            </div>
+          </div>
+
+          {salesRecon.overlap_months.length === 0 ? (
+            <div className="empty">{t("salesrecon_no_overlap")}</div>
+          ) : salesRecon.divergences.length === 0 ? (
+            <div className="empty">{t("salesrecon_none_found")}</div>
+          ) : (
+            <div className="tablewrap" style={{ maxHeight: 320 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t("salesrecon_th_item")}</th>
+                    <th>{t("salesrecon_th_category")}</th>
+                    <th>{t("salesrecon_th_month")}</th>
+                    <th className="num">{t("salesrecon_th_one")}</th>
+                    <th className="num">{t("salesrecon_th_sap")}</th>
+                    <th className="num">{t("salesrecon_th_diff")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {salesRecon.divergences.map((d) => (
+                    <tr key={`${d.item_id}-${d.month}`}>
+                      <td style={{ fontWeight: 600 }}>{d.name}</td>
+                      <td className="dim">{d.category ?? "—"}</td>
+                      <td className="dim mono">{d.month}</td>
+                      <td className="num mono" style={{ fontWeight: d.higher_source === "ONE" ? 700 : 400 }}>
+                        {d.one_closed_actual.toLocaleString()}
+                      </td>
+                      <td className="num mono" style={{ fontWeight: d.higher_source === "SAP" ? 700 : 400 }}>
+                        {d.sap_actual.toLocaleString()}
+                      </td>
+                      <td className="num mono" style={{ color: "var(--amber)" }}>
+                        {d.pct_diff}%
                       </td>
                     </tr>
                   ))}

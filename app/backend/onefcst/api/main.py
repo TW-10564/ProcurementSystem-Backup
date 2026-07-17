@@ -20,14 +20,15 @@ from sqlalchemy.orm import Session
 from .. import scheduler as scheduler_mod
 from ..config import CORS_ORIGINS
 from ..db import get_session
-from ..models import Item, CompatRule, Adjustment
+from ..models import Item, CompatRule, Adjustment, Suggestion
 from ..advisory import rules as rules_svc
 from ..advisory import adjustments as adj_svc
 from ..advisory import notifications as notif_svc
+from ..advisory import discontinuation_review as discontinuation_svc
 from .auth import require_api_key
 from .schemas import (CompatRuleOut, ConfirmRequest, RejectRequest,
                       EditRuleRequest, AdjustmentIn, AdjustmentOut,
-                      NotificationOut)
+                      NotificationOut, DiscontinuationSuggestionOut)
 
 
 @asynccontextmanager
@@ -175,6 +176,55 @@ def edit_compat_rule(rule_id: int, body: EditRuleRequest, session: Session = Dep
                          status=r.status, confirmed_by=r.confirmed_by, note=r.note)
 
 
+def _discontinuation_out(s: Suggestion) -> DiscontinuationSuggestionOut:
+    import json as _json
+    try:
+        payload = _json.loads(s.payload) if s.payload else {}
+    except (TypeError, ValueError):
+        payload = {}
+    return DiscontinuationSuggestionOut(
+        id=s.id, item_id=payload.get("item_id"), item_name=payload.get("name"),
+        category=payload.get("category"), source_category_file=payload.get("source_category_file"),
+        detected_at=payload.get("detected_at"), status=s.status, reviewed_by=s.reviewed_by)
+
+
+# ------------------------------------------------------- discontinuation ---
+@app.get("/discontinuation-suggestions", response_model=list[DiscontinuationSuggestionOut])
+def get_discontinuation_suggestions(status: str | None = None, limit: int = 500,
+                                     session: Session = Depends(db)):
+    """Draft queue for purchasing's gray 'won't reorder' cell-marking (see
+    registry/build.py step 7): a SKU newly seen gray-marked lands here as
+    'draft' — Item.eol_flag is untouched until /confirm is called."""
+    rows = discontinuation_svc.list_suggestions(session, status=status, limit=limit)
+    return [_discontinuation_out(s) for s in rows]
+
+
+@app.post("/discontinuation-suggestions/{suggestion_id}/confirm",
+         response_model=DiscontinuationSuggestionOut)
+def confirm_discontinuation(suggestion_id: int, body: ConfirmRequest,
+                            session: Session = Depends(db)):
+    try:
+        s = discontinuation_svc.confirm_suggestion(session, suggestion_id, body.author)
+    except discontinuation_svc.SuggestionNotFound as e:
+        raise HTTPException(404, str(e))
+    except discontinuation_svc.SuggestionNotEditable as e:
+        raise HTTPException(409, str(e))
+    return _discontinuation_out(s)
+
+
+@app.post("/discontinuation-suggestions/{suggestion_id}/reject",
+         response_model=DiscontinuationSuggestionOut)
+def reject_discontinuation(suggestion_id: int, body: RejectRequest,
+                           session: Session = Depends(db)):
+    try:
+        s = discontinuation_svc.reject_suggestion(session, suggestion_id, body.author, body.reason)
+    except discontinuation_svc.SuggestionNotFound as e:
+        raise HTTPException(404, str(e))
+    except discontinuation_svc.SuggestionNotEditable as e:
+        raise HTTPException(409, str(e))
+    return _discontinuation_out(s)
+
+
 @app.post("/compat-rules/bulk-confirm")
 def bulk_confirm(author: str, threshold: float = 0.9, session: Session = Depends(db)):
     n = rules_svc.bulk_confirm_high_confidence(session, author, threshold)
@@ -250,7 +300,7 @@ def get_item(item_id: int, session: Session = Depends(db)):
 
 # ------------------------------------------------------------- forecasts ---
 @app.post("/forecasts/run")
-def run_forecast(horizon: int = 12, session: Session = Depends(db)):
+def run_forecast(horizon: int = 6, session: Session = Depends(db)):
     """Generate a new forecast run (writes only to the app DB). Every run
     validates itself out-of-sample and stores the accuracy with the run."""
     from ..forecasting import generate
@@ -375,6 +425,17 @@ def get_discontinuation_risk(session: Session = Depends(db)):
     cover this case for most categories."""
     from ..verify.discontinuation import run as run_discontinuation
     return _cached("discontinuation-risk", lambda: run_discontinuation(session))
+
+
+@app.get("/reports/sales-reconciliation")
+def get_sales_reconciliation(session: Session = Depends(db)):
+    """ONE's closed-month plan_value vs SAP's shipped-quantity Actual for
+    the SAME item-month — no assumed winner (see verify/sales_reconciliation.py).
+    The forecasting engine trains on ONE's number; FVA scoring grades
+    against SAP's — a disagreement here means those two processes are
+    working from different ground truths for that item-month."""
+    from ..verify.sales_reconciliation import run as run_sales_reconciliation
+    return _cached("sales-reconciliation", lambda: run_sales_reconciliation(session))
 
 
 @app.get("/reports/stock-reconciliation")

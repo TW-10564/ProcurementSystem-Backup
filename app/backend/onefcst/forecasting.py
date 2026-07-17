@@ -25,7 +25,17 @@ from . import planner_accuracy
 from . import tier2_forecasting
 
 METHOD_VERSION = "sku-selected-v3"  # v3 adds combo (avg-of-candidates), M+1 reporting
-DEFAULT_HORIZON = 12
+# Capped at 6 months (2026-07-17, user instruction): ONE's own 部品予測
+# master sheet typically only carries committed plan data ~6 months out
+# (apply_known_plan copies it verbatim wherever it exists — see
+# engine/baseline.py). Forecasting further than that means the model is
+# purely extrapolating with nothing on ONE's side to corroborate it,
+# which is exactly what made an earlier cross-check look like the system
+# was running ~2x "too high" (it wasn't — see project memory) purely
+# because a 12-month total was being compared against ONE's ~6-month
+# coverage. Keeping the horizon at 6 keeps every forecasted month at
+# least within reach of a real ONE number to validate against.
+DEFAULT_HORIZON = 6
 
 
 def _level_series(session, level: str) -> dict[int, dict[date, float]]:
@@ -133,8 +143,18 @@ def generate(session=None, horizon: int = DEFAULT_HORIZON,
         n_by_method: dict[str, int] = {}
         scored = []
         forecasted = 0
+        skipped_discontinued = 0
         already_forecasted: set[int] = set()
         for item_id, obs in series.items():
+            item = items.get(item_id)
+            # eol_flag (auto-set from purchasing's gray-cell "won't reorder"
+            # marking, see registry/build.py step 7 — a human already made
+            # this call by coloring the cell) — a discontinued item must not
+            # get a forecast/order suggestion regardless of what its recent
+            # demand history would otherwise project (2026-07-17).
+            if item is not None and item.eol_flag:
+                skipped_discontinued += 1
+                continue
             result = baseline.make_forecast(obs, start, horizon)
             if result is None:
                 continue
@@ -197,7 +217,8 @@ def generate(session=None, horizon: int = DEFAULT_HORIZON,
 
         summary = {"start_month": start.isoformat(), "horizon": horizon,
                    "items_forecasted": forecasted,
-                   "items_skipped_stale": len(series) - forecasted,
+                   "items_skipped_stale": len(series) - forecasted - skipped_discontinued,
+                   "items_skipped_discontinued": skipped_discontinued,
                    "methods": n_by_method, "holdout": holdout,
                    "planner_snapshots_archived": n_archived,
                    "tier2": tier2_summary}

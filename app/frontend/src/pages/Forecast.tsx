@@ -302,11 +302,19 @@ export default function Forecast() {
         api.rebuildHistory(10).then(setRebuildHistory).catch(() => {});
         if (s.status === "done") {
           const ship = s.report?.sap_shipments;
-          setRebuildFlash(
-            ship
-              ? t("fc_rebuild_done_with_shipments", { resolved: ship.resolved, unresolved: ship.unresolved })
-              : t("fc_rebuild_done")
-          );
+          const nas = s.report?.nas_refresh;
+          const base = ship
+            ? t("fc_rebuild_done_with_shipments", { resolved: ship.resolved, unresolved: ship.unresolved })
+            : t("fc_rebuild_done");
+          const nasNote =
+            nas?.status === "ok"
+              ? t("fc_rebuild_nas_refreshed", { files: nas.files_in_cache ?? 0 })
+              : nas?.status === "skipped"
+                ? t("fc_rebuild_nas_skipped")
+                : nas?.status === "error"
+                  ? t("fc_rebuild_nas_error", { reason: nas.reason ?? "" })
+                  : "";
+          setRebuildFlash(nasNote ? `${base} ${nasNote}` : base);
         } else if (s.status === "error") {
           setRebuildError(s.error ?? t("fc_rebuild_error_unknown"));
         }
@@ -401,10 +409,10 @@ export default function Forecast() {
     () => (summary ? summary.categories.reduce((s, c) => s + c.next3_total, 0) : 0),
     [summary],
   );
-  const maxNext12 = useMemo(
+  const maxNext6 = useMemo(
     () =>
       summary
-        ? Math.max(1, ...summary.categories.map((c) => c.next12_total))
+        ? Math.max(1, ...summary.categories.map((c) => c.next6_total))
         : 1,
     [summary],
   );
@@ -736,6 +744,13 @@ export default function Forecast() {
                                 <td className="num mono dim">{fmtQty(r.safety_stock)}</td>
                                 <td className="num mono" style={{ fontWeight: 700, color: "var(--amber)" }}>
                                   {fmtQty(r.order_qty)}
+                                  {r.moq_excessive && (
+                                    <DiscontinuingBadge
+                                      label={t("fc_orders_moq_excessive_badge", {
+                                        months: r.moq_months_of_cover ?? 0,
+                                      })}
+                                    />
+                                  )}
                                 </td>
                                 <td className="mono">{fmtMonth(r.order_by, lang)}</td>
                               </tr>
@@ -785,7 +800,7 @@ export default function Forecast() {
                     <th>{t("fc_th_category")}</th>
                     <th className="num">{t("fc_th_items")}</th>
                     <th className="num">{t("fc_th_next3")}</th>
-                    <th className="num">{t("fc_th_next12")}</th>
+                    <th className="num">{t("fc_th_next6")}</th>
                     <th style={{ width: 96 }} />
                   </tr>
                 </thead>
@@ -808,16 +823,16 @@ export default function Forecast() {
                         <td className="num mono dim">{c.items}</td>
                         <td className="num mono">{c.next3_total.toLocaleString()}</td>
                         <td className="num mono" style={{ fontWeight: 700 }}>
-                          {c.next12_total.toLocaleString()}
+                          {c.next6_total.toLocaleString()}
                         </td>
                         <td>
                           <span
                             className="minibar"
                             style={{
-                              width: `${Math.max(3, Math.round((c.next12_total / maxNext12) * 88))}px`,
+                              width: `${Math.max(3, Math.round((c.next6_total / maxNext6) * 88))}px`,
                               opacity: selected ? 1 : 0.85,
                             }}
-                            title={c.next12_total.toLocaleString()}
+                            title={c.next6_total.toLocaleString()}
                           />
                         </td>
                       </tr>
@@ -880,7 +895,7 @@ export default function Forecast() {
                       <th>{t("fc_th_category")}</th>
                       <th>{t("fc_th_method")}</th>
                       <th className="num">{t("fc_th_wape")}</th>
-                      <th className="num">{t("fc_th_total12")}</th>
+                      <th className="num">{t("fc_th_total6")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -904,7 +919,7 @@ export default function Forecast() {
                           </span>
                         </td>
                         <td className="num mono" style={{ fontWeight: 700 }}>
-                          {r.next12_total.toLocaleString()}
+                          {r.next6_total.toLocaleString()}
                         </td>
                       </tr>
                     ))}
@@ -1259,7 +1274,7 @@ export default function Forecast() {
                         {fmtMonth(m, lang)}
                       </th>
                     ))}
-                    <th className="num">{t("fc_th_total12")}</th>
+                    <th className="num">{t("fc_th_total6")}</th>
                     <th>{t("fc_th_order")}</th>
                   </tr>
                 </thead>
@@ -1310,7 +1325,7 @@ export default function Forecast() {
                         className="num mono"
                         style={{ fontWeight: 700, opacity: lowTrust ? 0.5 : 1 }}
                       >
-                        {r.next12_total.toLocaleString()}
+                        {r.next6_total.toLocaleString()}
                       </td>
                       <td>
                         {r.order ? (

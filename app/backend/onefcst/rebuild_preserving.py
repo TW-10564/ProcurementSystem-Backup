@@ -40,17 +40,58 @@ sets it) to "whichever run was live at adjustment time" by comparing
 ForecastRun.created_at against Adjustment.created_at. Shifting those
 timestamps would silently repoint old adjustments at the wrong historical
 run.
+
+Item.eol_flag/marked_no_reorder and discontinuation Suggestion rows (added
+2026-07-17, same day advisory/discontinuation_review.py's confirm/reject
+queue was built) need BOTH a value restore and a de-dup step, not just a
+plain carry-over like everything else here. Two things collide:
+  1. Item rows are fully recreated by build_registry() (see above — no
+     stable id), so a human's confirmed eol_flag=True LIVES ON THE OLD ROW
+     and is lost the instant that row is dropped, unless explicitly
+     restored onto the new row by canonical_name — exactly the failure
+     this whole module exists to prevent for Adjustment/CompatRule, just
+     not yet applied to this newer feature until now.
+  2. registry/build.py's step 7 (gray-cell scan) runs INSIDE build_mod.run(),
+     which happens BEFORE _restore() gets a chance to put the old
+     marked_no_reorder value back — so a fresh Item row always starts that
+     scan at marked_no_reorder=False, and a SKU still gray-marked in the
+     newly-ingested file will look like a brand-new detection and get a
+     fresh draft Suggestion, even if it was already reviewed
+     (confirmed/rejected) in an earlier cycle. _restore() must detect and
+     remove that redundant fresh draft before reinserting the real
+     (already-reviewed) history — the same "supersede, don't duplicate"
+     idea Actual/WeeklyActual already use above, applied to a different
+     kind of collision.
 """
 from __future__ import annotations
 
+import json
+
 from . import build as build_mod
+from . import nas_sync
 from .db import get_session
 from .models import (Item, ForecastRun, Forecast, Adjustment, AccuracyScore,
-                     PlannerSnapshot, CompatRule, AuditLog, Actual, WeeklyActual)
+                     PlannerSnapshot, CompatRule, AuditLog, Actual, WeeklyActual,
+                     Suggestion)
 
 
 def _snapshot(session) -> dict:
     items = {i.id: i.canonical_name for i in session.query(Item.id, Item.canonical_name)}
+    eol_flags = {i.canonical_name: (i.eol_flag, i.marked_no_reorder)
+                for i in session.query(Item.canonical_name, Item.eol_flag, Item.marked_no_reorder)
+                if i.eol_flag or i.marked_no_reorder}
+    discontinuation_suggestions = []
+    for s in session.query(Suggestion).filter(Suggestion.kind == "discontinuation"):
+        try:
+            payload = json.loads(s.payload) if s.payload else {}
+        except (TypeError, ValueError):
+            payload = {}
+        discontinuation_suggestions.append({
+            "item_id": payload.get("item_id"), "payload": s.payload,
+            "confidence": s.confidence, "status": s.status,
+            "reviewed_by": s.reviewed_by, "reviewed_at": s.reviewed_at,
+            "created_at": s.created_at,
+        })
     runs = [
         {"id": r.id, "method_version": r.method_version,
          "created_at": r.created_at, "note": r.note}
@@ -100,7 +141,8 @@ def _snapshot(session) -> dict:
     return {"items": items, "runs": runs, "forecasts": forecasts,
             "adjustments": adjustments, "scores": scores, "snapshots": snapshots,
             "compat_rules": compat_rules, "audit_log": audit_log, "actuals": actuals,
-            "weekly_actuals": weekly_actuals}
+            "weekly_actuals": weekly_actuals, "eol_flags": eol_flags,
+            "discontinuation_suggestions": discontinuation_suggestions}
 
 
 def _restore(session, snap: dict) -> dict:
@@ -115,8 +157,23 @@ def _restore(session, snap: dict) -> dict:
     # and created_at must be copied verbatim (see module docstring).
     run_id_map = {}
     dropped = {"forecasts": 0, "adjustments": 0, "scores": 0, "snapshots": 0,
-              "compat_rules": 0, "actuals": 0, "weekly_actuals": 0}
-    superseded = {"actuals": 0, "weekly_actuals": 0}
+              "compat_rules": 0, "actuals": 0, "weekly_actuals": 0,
+              "discontinuation_suggestions": 0}
+    superseded = {"actuals": 0, "weekly_actuals": 0, "discontinuation_suggestions": 0}
+
+    # Item.eol_flag/marked_no_reorder — restore onto the NEW row by
+    # canonical_name BEFORE anything else touches Suggestion, so a
+    # previously human-confirmed discontinuation is never silently lost
+    # even if the Suggestion row itself somehow doesn't restore cleanly.
+    for name, (eol, no_reorder) in snap["eol_flags"].items():
+        new_id = new_items.get(name)
+        if new_id is None:
+            continue
+        item = session.get(Item, new_id)
+        if eol:
+            item.eol_flag = True
+        if no_reorder:
+            item.marked_no_reorder = True
     for r in snap["runs"]:
         new_run = ForecastRun(method_version=r["method_version"],
                               created_at=r["created_at"], note=r["note"])
@@ -221,13 +278,63 @@ def _restore(session, snap: dict) -> dict:
         session.add(WeeklyActual(item_id=iid, week_start=a["week_start"],
                                  qty=a["qty"], source=a["source"]))
 
+    # Discontinuation suggestions: registry/build.py step 7 already ran
+    # (inside build_mod.run(), before we got here) against fresh Item rows
+    # that all started at marked_no_reorder=False — so a SKU still
+    # gray-marked in the new file may have just been given a brand-new
+    # draft Suggestion, even though the OLD history below might show it
+    # was already confirmed/rejected. That fresh duplicate must be removed
+    # before the real history is restored (see module docstring).
+    fresh_drafts_by_item: dict[int, list[Suggestion]] = {}
+    for fd in session.query(Suggestion).filter(Suggestion.kind == "discontinuation",
+                                                Suggestion.status == "draft"):
+        try:
+            fd_item_id = json.loads(fd.payload).get("item_id") if fd.payload else None
+        except (TypeError, ValueError):
+            fd_item_id = None
+        if fd_item_id is not None:
+            fresh_drafts_by_item.setdefault(fd_item_id, []).append(fd)
+
+    for old_s in snap["discontinuation_suggestions"]:
+        iid = item_id(old_s["item_id"]) if old_s["item_id"] is not None else None
+        if iid is None:
+            dropped["discontinuation_suggestions"] += 1
+            continue
+        for fd in fresh_drafts_by_item.pop(iid, []):
+            session.delete(fd)
+            superseded["discontinuation_suggestions"] += 1
+        # payload's own embedded item_id is the OLD id — rewrite it to the
+        # new one so future lookups (list_suggestions/confirm/reject) match
+        # the item this restored row actually refers to now.
+        try:
+            payload = json.loads(old_s["payload"]) if old_s["payload"] else {}
+        except (TypeError, ValueError):
+            payload = {}
+        payload["item_id"] = iid
+        session.add(Suggestion(kind="discontinuation", payload=json.dumps(payload, ensure_ascii=False),
+                               confidence=old_s["confidence"], status=old_s["status"],
+                               reviewed_by=old_s["reviewed_by"], reviewed_at=old_s["reviewed_at"],
+                               created_at=old_s["created_at"]))
+
     session.commit()
     return dropped, superseded
 
 
 def run() -> dict:
     """Full NAS re-ingest (build.run()) with adjustment/forecast/accuracy/
-    planner-snapshot history preserved across the drop+rebuild."""
+    planner-snapshot history preserved across the drop+rebuild.
+
+    Refreshes the local ONE-source cache from Z: via Windows interop
+    first (see nas_sync.py — /mnt/z itself is never live, WSL doesn't
+    auto-mount net-use'd drives) so both the manual rebuild button and
+    the weekly scheduler (both call this one function) always pull
+    current NAS data, not whatever was cached whenever someone last
+    happened to run a refresh by hand. Failure here is non-fatal — the
+    build proceeds against whatever's already cached locally, and
+    build.py's own _check_required_sources() is the real safety net if
+    that's not enough."""
+    nas_refresh = nas_sync.refresh_from_nas()
+
     session = get_session()
     try:
         snap = _snapshot(session)
@@ -235,6 +342,7 @@ def run() -> dict:
         session.close()
 
     build_report = build_mod.run()
+    build_report["nas_refresh"] = nas_refresh
 
     session = get_session()
     try:
@@ -248,6 +356,8 @@ def run() -> dict:
         "snapshots": len(snap["snapshots"]), "compat_rules": len(snap["compat_rules"]),
         "audit_log": len(snap["audit_log"]), "actuals": len(snap["actuals"]),
         "weekly_actuals": len(snap["weekly_actuals"]),
+        "eol_flags": len(snap["eol_flags"]),
+        "discontinuation_suggestions": len(snap["discontinuation_suggestions"]),
         "dropped": dropped, "superseded": superseded,
     }
     return build_report

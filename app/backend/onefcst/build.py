@@ -10,6 +10,7 @@ from .config import ONE_MASTER, NOTE_ONE_MASTER, planning_file
 from .db import init_db, get_session, engine
 from .models import Base, Snapshot, PlanValue, StockState, Actual, WeeklyActual, Item
 from .ingestion import one_master, notepc_forecast, planning4, planning1, subfiles, sap, sap_shipments
+from .ingestion.sap_shipment_overrides import resolve_shipment_override
 from .ingestion.excel import file_meta
 from .ingestion.subfile_config import FILES as SUBFILE_CFG, BASE as SUBFILE_BASE
 from .registry.build import (build_registry, resolve, resolve_via_source,
@@ -83,13 +84,21 @@ def _ingest_plan_rows(session, norm_index, snap, rows, level, resolved_counter):
 
 
 def _resolve_shipment_row(session, norm_index, row):
-    """name_a (読みかえ output) first, name_b (raw SAP code) fallback —
+    """name_a (読みかえ output) first, name_b (raw SAP code) fallback, then
+    the verified manual override table (see ingestion/sap_shipment_overrides.py)
+    for raw labels known to use a naming variant (e.g. a "v2"/色 suffix)
+    the catalog and name_a/name_b matching don't otherwise resolve —
     see ingestion/sap_shipments.py's module docstring."""
     item = None
     if row["name_a"] and row["name_a"] != "該当無し":
         item = resolve_any(session, norm_index, row["name_a"])
     if item is None and row["name_b"]:
         item = resolve_any(session, norm_index, str(row["name_b"]))
+    if item is None:
+        override_target = (resolve_shipment_override(row["name_a"])
+                            or resolve_shipment_override(row["name_b"]))
+        if override_target:
+            item = resolve_any(session, norm_index, override_target)
     return item
 
 

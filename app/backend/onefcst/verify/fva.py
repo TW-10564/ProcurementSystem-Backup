@@ -15,6 +15,7 @@ from datetime import date
 from ..db import get_session
 from ..models import Adjustment, Actual, Item, Forecast, ForecastRun
 from ..engine.fva import score_fva
+from .sales_reconciliation import _incomplete_sap_months
 
 
 def _original_baseline(session, adj: Adjustment) -> float | None:
@@ -40,13 +41,23 @@ def _original_baseline(session, adj: Adjustment) -> float | None:
 
 
 def scoreable_adjustments(session) -> list[dict]:
-    """Adjustments whose target month is in the past AND has an actual on
-    record for the same item — the only cases we can honestly score."""
+    """Adjustments whose target month is in the past AND has a COMPLETE
+    actual on record for the same item — the only cases we can honestly
+    score. A month whose SAP data doesn't cover its own start (see
+    verify/sales_reconciliation._incomplete_sap_months — found 2026-07-17
+    via the same investigation that surfaced ~70 false sales-reconciliation
+    divergences) is skipped exactly like a missing actual: scoring an
+    adjustment against a partial-month total would silently grade it
+    against demand that never happened, not real underperformance."""
     today = date.today().replace(day=1)
     adjustments = (session.query(Adjustment)
                   .filter(Adjustment.month < today).all())
+    incomplete_months = _incomplete_sap_months(
+        session, {adj.month for adj in adjustments})
     out = []
     for adj in adjustments:
+        if adj.month in incomplete_months:
+            continue
         actual_row = (session.query(Actual.qty)
                      .filter(Actual.item_id == adj.item_id, Actual.month == adj.month)
                      .first())

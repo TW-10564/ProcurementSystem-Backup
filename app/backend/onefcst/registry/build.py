@@ -11,15 +11,18 @@ Every alias records its source system. Conflicts are counted, not guessed.
 """
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import func
 
 from ..config import TIER1_CATEGORIES, ONE_DIR
 from ..db import get_session
-from ..models import Item, ItemAlias
+from ..models import Item, ItemAlias, Suggestion
 from ..ingestion import one_master, note_plan, notepc_forecast, planning4, stock_policy
 from ..ingestion import mb_procurement
 from ..ingestion import no_reorder_flag
 from ..ingestion import lead_time as lead_time_mod
+from ..advisory.discontinuation_review import create_draft as _create_discontinuation_draft
 
 
 def _add_alias(session, cache: dict, item_id: int, alias: str, system: str,
@@ -304,19 +307,49 @@ def build_registry() -> dict:
     stats["mb_liability_items_filled"] = mb_liability_filled
 
     # -- 7. "won't reorder" gray-cell marking (部品詳細, .xlsx categories only) --
-    # Purchasing's own early-warning signal, ahead of the formal eol_flag —
-    # see ingestion/no_reorder_flag.py's docstring for how this was verified
-    # against real data. Only 6 of 17 categories are readable (.xlsx, not
-    # .xlsb) — items in the other 11 simply never get this flag set, which
-    # is a tooling limitation, not a claim those items are never marked.
+    # Purchasing's own explicit "won't reorder" decision, read fresh from
+    # the live cell color on every build (never a static/cached list — a
+    # SKU un-marked gray in a later file simply stops being newly detected
+    # on the next build, same as any other ingested field).
+    #
+    # Policy (2026-07-17, user instruction): the FIRST time a SKU is ever
+    # seen gray-marked, it does NOT auto-flip eol_flag — it creates a draft
+    # discontinuation Suggestion (advisory/discontinuation_review.py) for a
+    # human to confirm or reject, the same "system suggests, human decides"
+    # pattern already used for compat rules. eol_flag only gets set once
+    # confirm_suggestion() runs. A SKU already marked_no_reorder=True from a
+    # PRIOR build (already reviewed once, confirmed or still pending) does
+    # not get a duplicate draft — only genuinely new detections do.
+    # (The 15 SKUs already gray-marked as of 2026-07-17 were reviewed and
+    # directly promoted to eol_flag=True that day as a one-time backfill —
+    # not through this queue; see project memory.)
+    # Only 6 of 17 categories are readable (.xlsx, not .xlsb) — items in the
+    # other 11 simply never get this flag set, a tooling limitation, not a
+    # claim those items are never marked.
     no_reorder_filled = 0
+    discontinuation_drafts_created = 0
+    existing_draft_item_ids = set()
+    for s in session.query(Suggestion).filter(Suggestion.kind == "discontinuation").all():
+        try:
+            item_id = json.loads(s.payload).get("item_id")
+        except (TypeError, ValueError):
+            continue
+        if item_id is not None:
+            existing_draft_item_ids.add(item_id)
     for cat, skus in no_reorder_flag.find_all_no_reorder_skus().items():
         for sku in skus:
             item = by_adana.get(sku)
-            if item is not None and not item.marked_no_reorder:
-                item.marked_no_reorder = True
-                no_reorder_filled += 1
+            if item is None:
+                continue
+            if item.marked_no_reorder:
+                continue   # already seen gray in a prior build — no duplicate draft
+            item.marked_no_reorder = True
+            no_reorder_filled += 1
+            if item.id not in existing_draft_item_ids and not item.eol_flag:
+                _create_discontinuation_draft(session, item, category_file=cat)
+                discontinuation_drafts_created += 1
     stats["no_reorder_items_filled"] = no_reorder_filled
+    stats["discontinuation_drafts_created"] = discontinuation_drafts_created
 
     # -- 8. real observed lead time (購買計画 PO history, delivered only) -----
     # See ingestion/lead_time.py's docstring — this can diverge sharply from

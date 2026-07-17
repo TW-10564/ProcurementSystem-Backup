@@ -4,6 +4,7 @@ import type {
   BacktestReport,
   CompatRule,
   DiscontinuationReport,
+  DiscontinuationSuggestion,
   ForecastDetail,
   ForecastList,
   ForecastRunInfo,
@@ -16,6 +17,7 @@ import type {
   PlanVsActual,
   RebuildHistoryEntry,
   RebuildStatus,
+  SalesReconciliationReport,
   StockReconciliationReport,
 } from "./types";
 
@@ -55,6 +57,21 @@ export const api = {
   ) =>
     http
       .patch<CompatRule>(`/compat-rules/${id}`, { author, ...changes })
+      .then((r) => r.data),
+
+  discontinuationSuggestions: (params?: { status?: string }) =>
+    http
+      .get<DiscontinuationSuggestion[]>("/discontinuation-suggestions", { params })
+      .then((r) => r.data),
+
+  confirmDiscontinuation: (id: number, author: string) =>
+    http
+      .post<DiscontinuationSuggestion>(`/discontinuation-suggestions/${id}/confirm`, { author })
+      .then((r) => r.data),
+
+  rejectDiscontinuation: (id: number, author: string, reason: string) =>
+    http
+      .post<DiscontinuationSuggestion>(`/discontinuation-suggestions/${id}/reject`, { author, reason })
       .then((r) => r.data),
 
   bulkConfirm: (author: string, threshold: number) =>
@@ -148,6 +165,9 @@ export const api = {
 
   stockReconciliation: () =>
     http.get<StockReconciliationReport>("/reports/stock-reconciliation").then((r) => r.data),
+
+  salesReconciliation: () =>
+    http.get<SalesReconciliationReport>("/reports/sales-reconciliation").then((r) => r.data),
 };
 
 // Downloads must go through `http`, not a plain <a href> — the backend's

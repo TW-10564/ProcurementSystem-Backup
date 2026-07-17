@@ -23,6 +23,20 @@ class CompatRuleOut(BaseModel):
         from_attributes = True
 
 
+class DiscontinuationSuggestionOut(BaseModel):
+    id: int
+    item_id: int | None = None
+    item_name: str | None = None
+    category: str | None = None
+    source_category_file: str | None = None
+    detected_at: str | None = None
+    status: str
+    reviewed_by: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
 class ConfirmRequest(BaseModel):
     author: str = Field(..., min_length=1)
 

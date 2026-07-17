@@ -12,6 +12,17 @@ export interface CompatRule {
   note: string | null;
 }
 
+export interface DiscontinuationSuggestion {
+  id: number;
+  item_id: number | null;
+  item_name: string | null;
+  category: string | null;
+  source_category_file: string | null;
+  detected_at: string | null;
+  status: "draft" | "confirmed" | "rejected";
+  reviewed_by: string | null;
+}
+
 export interface LlmDraftResult {
   ok: boolean;
   model: string;
@@ -132,10 +143,32 @@ export interface StockReconciliationReport {
   note: string;
 }
 
+export interface SalesDivergence {
+  item_id: number;
+  name: string;
+  category: string | null;
+  month: string;
+  one_closed_actual: number;
+  sap_actual: number;
+  diff: number;
+  pct_diff: number;
+  higher_source: "ONE" | "SAP";
+}
+
+export interface SalesReconciliationReport {
+  overlap_months: string[];
+  compared_item_months: number;
+  divergence_threshold_pct: number;
+  divergences: SalesDivergence[];
+  note: string;
+}
+
 export interface RebuildReport {
   sap_shipments?: { resolved: number; unresolved: number; rows: number };
   history_preserved?: { actuals: number; adjustments: number; compat_rules: number };
   gate_a?: { plan_values: number; resolved: number; rate: number; status: string };
+  nas_refresh?: { status: "ok" | "skipped" | "error"; reason?: string;
+                  files_in_cache?: number };
 }
 
 export interface RebuildStatus {
@@ -205,7 +238,7 @@ export interface ForecastCategory {
   category: string;
   items: number;
   next3_total: number;
-  next12_total: number;
+  next6_total: number;
   no_stock_tracking_items?: number;
 }
 
@@ -213,7 +246,7 @@ export interface ForecastSummary {
   run: ForecastRunInfo | null;
   orders_needed?: number;
   categories: ForecastCategory[];
-  excluded_no_stock_tracking?: { items: number; next3_total: number; next12_total: number };
+  excluded_no_stock_tracking?: { items: number; next3_total: number; next6_total: number };
 }
 
 export interface ForecastRow {
@@ -227,7 +260,7 @@ export interface ForecastRow {
   wape_full_horizon: number | null;  // 6-month blended WAPE — secondary caveat
   stock: number | null;
   qty: number[];
-  next12_total: number;
+  next6_total: number;
   has_adjustment: boolean;
   order: { qty: number; order_by: string } | null;
 }
@@ -250,6 +283,8 @@ export interface OrderSuggestionRow {
   order_qty: number;
   order_by: string;
   breach_month: string;
+  moq_excessive: boolean;
+  moq_months_of_cover: number | null;
 }
 
 export interface OrderSuggestions {
