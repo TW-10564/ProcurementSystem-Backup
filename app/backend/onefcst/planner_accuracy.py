@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from .models import Item, PlannerSnapshot, PlanValue
+from .models import PlannerSnapshot, PlanValue
 
 # ---------------------------------------------------------------------------
 # Historical reference: the planner's OWN real accuracy, found and computed

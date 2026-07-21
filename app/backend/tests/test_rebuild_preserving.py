@@ -72,8 +72,9 @@ def test_adjustment_and_compat_rule_and_audit_log_survive_a_rebuild(session):
 
     assert dropped == {"forecasts": 0, "adjustments": 0, "scores": 0,
                        "snapshots": 0, "compat_rules": 0, "actuals": 0,
-                       "weekly_actuals": 0}
-    assert superseded == {"actuals": 0, "weekly_actuals": 0}
+                       "weekly_actuals": 0, "discontinuation_suggestions": 0,
+                       "order_actions": 0}
+    assert superseded == {"actuals": 0, "weekly_actuals": 0, "discontinuation_suggestions": 0}
 
     new_cpu = session.query(Item).filter_by(canonical_name="CPU_A").one()
     new_mb = session.query(Item).filter_by(canonical_name="MB_A").one()

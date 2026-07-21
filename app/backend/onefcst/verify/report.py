@@ -21,7 +21,7 @@ from sqlalchemy import func
 
 from ..config import EXPORT_DIR
 from ..db import get_session
-from ..models import Item, ItemAlias, PlanValue, Snapshot
+from ..models import Item, PlanValue, Snapshot
 
 HEADER_FILL = PatternFill("solid", fgColor="1D4ED8")
 HEADER_FONT = Font(color="FFFFFF", bold=True)

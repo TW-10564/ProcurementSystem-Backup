@@ -69,6 +69,12 @@ DB_PATH = DATA_DIR / "onefcst.db"
 EXPORT_DIR = DATA_DIR / "exports"
 EXPORT_DIR.mkdir(exist_ok=True)
 
+# DATABASE_URL — unset by default (local/WSL dev: sqlite at DB_PATH). Set to
+# a real postgresql+psycopg://... URL for the DGX/production deployment; see
+# db.py, which picks pool class by dialect (SQLite wants NullPool, Postgres
+# wants a real QueuePool — see that module's own comment for why).
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
 # --- domain constants --------------------------------------------------------
 # Tier-1 = categories the planning dept plans directly; everything else is
 # Tier-2 (derived by purchasing via attach/compatibility).

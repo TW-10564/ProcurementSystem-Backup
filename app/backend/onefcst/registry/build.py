@@ -406,8 +406,22 @@ def resolve_via_source(session, name: str, source_system: str) -> Item | None:
     return row.item if row else None
 
 
-def resolve(session, name: str) -> Item | None:
+def resolve(session, name: str, prefer_source: str | None = None) -> Item | None:
     """Resolve any source-system name to its canonical item.
+
+    prefer_source: when the caller's own context already knows which alias
+    system `name` should match against (e.g. SAP SYOCODE -> '商品コード',
+    a 部品詳細 sheet's SKU column -> 'ONE綽名'), check that source FIRST.
+    Found 2026-07-21: 6 more cross-system alias collisions exist beyond the
+    documented B650 case (see build_registry's cross_system_alias_conflicts),
+    each a variant SKU (Samsung/X3D/color suffix) sharing a numeric code
+    with its base part under a DIFFERENT source_system — resolve_any()'s
+    unguarded call into this function was silently misrouting real SAP
+    stock rows to the wrong item for every one of them, the exact same bug
+    class resolve_via_source was built for, just not propagated past its
+    one original call site. Falls through to the source-agnostic tie-break
+    below when the preferred source has no match, so callers that pass a
+    prefer_source never resolve to LESS than they would have before.
 
     Deterministic tie-break (FIX_PLAN C3): when the same alias string is
     claimed by items from two different source systems (not blocked by the
@@ -417,6 +431,12 @@ def resolve(session, name: str) -> Item | None:
     the underlying ambiguity (see build_registry's
     cross_system_alias_conflicts for that), it only makes the outcome
     stable and reproducible instead of silently flipping between rebuilds."""
+    if prefer_source is not None:
+        preferred = (session.query(ItemAlias)
+                    .filter(ItemAlias.alias == name, ItemAlias.source_system == prefer_source)
+                    .order_by(ItemAlias.id.asc()).first())
+        if preferred is not None:
+            return preferred.item
     row = (session.query(ItemAlias).filter(ItemAlias.alias == name)
           .order_by(ItemAlias.id.asc()).first())
     return row.item if row else None
@@ -467,7 +487,8 @@ def resolve_normalized(index: dict[str, Item], name: str) -> Item | None:
     return index.get(key) if key else None
 
 
-def resolve_any(session, norm_index: dict[str, Item], name: str) -> Item | None:
+def resolve_any(session, norm_index: dict[str, Item], name: str,
+                prefer_source: str | None = None) -> Item | None:
     """The standard resolution path for every ingestion source: exact
     resolve() first (preserves its deterministic tie-break), normalized
     (width/spacing/hyphen/case-insensitive) fallback second.
@@ -481,6 +502,10 @@ def resolve_any(session, norm_index: dict[str, Item], name: str) -> Item | None:
     reimplemented per-caller. norm_index should be built ONCE per build
     run via build_normalized_alias_index (after build_registry() commits
     all aliases) and threaded through every call — rebuilding it per row
-    would be a full alias-table scan per row."""
-    item = resolve(session, name)
+    would be a full alias-table scan per row.
+
+    prefer_source: passed straight through to resolve() — see its
+    docstring. Pass this whenever the caller's own field already carries a
+    known identity type (SAP SYOCODE, a 部品詳細 sheet's 綽名 column, etc.)."""
+    item = resolve(session, name, prefer_source=prefer_source)
     return item if item is not None else resolve_normalized(norm_index, name)

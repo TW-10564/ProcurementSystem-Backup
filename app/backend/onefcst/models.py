@@ -211,6 +211,26 @@ class Suggestion(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class OrderAction(Base):
+    """Manual order-status tracking for order suggestions (Phase-1: no PO/
+    ERP integration — a human records what they actually did). One ACTIVE
+    (status='ordered') row per item at a time; callers must check for an
+    existing active row before creating a new one (same discipline
+    advisory/discontinuation_review.py's create_draft already documents for
+    Suggestion). status='received'/'dismissed' rows are historical."""
+    __tablename__ = "order_actions"
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False)
+    status = Column(String, nullable=False, default="ordered")  # ordered | received | dismissed
+    qty_ordered = Column(Float)
+    expected_arrival_date = Column(Date)
+    note = Column(Text)
+    ordered_by = Column(String)
+    ordered_at = Column(DateTime, default=datetime.utcnow)
+    received_by = Column(String)
+    received_at = Column(DateTime)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
     id = Column(Integer, primary_key=True)

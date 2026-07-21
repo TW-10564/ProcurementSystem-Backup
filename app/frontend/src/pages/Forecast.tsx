@@ -6,6 +6,7 @@ import type {
   ForecastDetail,
   ForecastList,
   ForecastSummary,
+  OrderActionInfo,
   OrderSuggestions,
   PlanVsActual,
   RebuildHistoryEntry,
@@ -35,8 +36,16 @@ function parseMethod(method: string | null): {
   base: string | null;
   knownPlan: boolean;
   discontinuing: boolean;
+  tier2: boolean;
 } {
-  if (!method) return { base: null, knownPlan: false, discontinuing: false };
+  if (!method) return { base: null, knownPlan: false, discontinuing: false, tier2: false };
+  // tier2_* methods never get a per-SKU backtest for their known_plan rows
+  // (tier2_forecasting.py only records an AccuracyScore for the
+  // tier2_attach_rate-flavored rows, not bare tier2_known_plan — see its
+  // generate_tier2()) — checked on the RAW string before any stripping so
+  // it survives every suffix combination (tier2_known_plan,
+  // tier2_attach_rate+known_plan, +discontinuing, ...).
+  const tier2 = method.startsWith("tier2_");
   let base = method;
   let discontinuing = false;
   let knownPlan = false;
@@ -51,7 +60,7 @@ function parseMethod(method: string | null): {
     knownPlan = true;
     base = null; // every month came from the real plan — no statistical method underneath
   }
-  return { base, knownPlan, discontinuing };
+  return { base, knownPlan, discontinuing, tier2 };
 }
 
 // Confidence tiers by hold-out WAPE — thresholds chosen from this session's
@@ -118,6 +127,20 @@ function fmtMonth(iso: string, lang: string): string {
   return lang === "ja"
     ? `${d.getFullYear()}/${d.getMonth() + 1}`
     : d.toLocaleDateString("en-US", { year: "2-digit", month: "short" });
+}
+
+const STOCK_STALE_DAYS = 10; // SAP ZM13 extract refreshes weekly (Mondays) — see CLAUDE.md
+
+function fmtDate(iso: string, lang: string): string {
+  const d = new Date(iso);
+  return lang === "ja"
+    ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
+    : d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function isStale(iso: string): boolean {
+  const days = (Date.now() - new Date(iso).getTime()) / 86400000;
+  return days > STOCK_STALE_DAYS;
 }
 
 function fmtQty(v: number | null | undefined): string {
@@ -208,6 +231,135 @@ function SectionLabel({ children }: { children: import("react").ReactNode }) {
   );
 }
 
+function currentAuthor(): string {
+  return localStorage.getItem("onefcst_author") ?? "bala";
+}
+
+/** Manual order-status tracking (Phase-1: no PO/ERP integration — a human
+ * records what they actually did). Renders as: a "mark ordered" button with
+ * an inline qty/date/note form when there's no active order_action, or a
+ * status badge + confirm-received/dismiss actions when there is one. Used
+ * both in the order-suggestions table (compact) and the per-item detail
+ * panel's suggestion block. stopPropagation everywhere since its container
+ * rows are themselves click-to-open-detail. */
+function OrderActionControl({
+  itemId, action, suggestedQty, onChanged, t, lang,
+}: {
+  itemId: number;
+  action: OrderActionInfo | null;
+  suggestedQty: number;
+  onChanged: () => void;
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
+  lang: string;
+}) {
+  const [formOpen, setFormOpen] = useState(false);
+  const [qty, setQty] = useState(String(suggestedQty || ""));
+  const [expected, setExpected] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
+
+  const submitMarkOrdered = async (e: React.MouseEvent) => {
+    stop(e);
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.markOrdered(itemId, {
+        author: currentAuthor(),
+        qty_ordered: qty.trim() ? Number(qty) : undefined,
+        expected_arrival_date: expected || undefined,
+        note: note.trim() || undefined,
+      });
+      setFormOpen(false);
+      onChanged();
+    } catch (ex: any) {
+      setErr(String(ex.message ?? ex));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmReceived = async (e: React.MouseEvent) => {
+    stop(e);
+    if (!action) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.confirmOrderReceived(action.id, currentAuthor());
+      onChanged();
+    } catch (ex: any) {
+      setErr(String(ex.message ?? ex));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dismissAction = async (e: React.MouseEvent) => {
+    stop(e);
+    if (!action) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.dismissOrderAction(action.id, currentAuthor());
+      onChanged();
+    } catch (ex: any) {
+      setErr(String(ex.message ?? ex));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (action) {
+    return (
+      <div onClick={stop} style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+        <span className={"order-action-badge" + (action.awaiting_confirmation ? " awaiting" : "")}>
+          {action.awaiting_confirmation ? t("fc_order_awaiting_confirmation") : t("fc_order_ordered_badge")}
+          {action.expected_arrival_date ? ` · ${fmtDate(action.expected_arrival_date, lang)}` : ""}
+        </span>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button className="btn-link" disabled={busy} onClick={confirmReceived}>
+            {t("fc_order_confirm_received")}
+          </button>
+          <button className="btn-link danger" disabled={busy} onClick={dismissAction}>
+            {t("fc_order_dismiss")}
+          </button>
+        </div>
+        {err && <div style={{ color: "var(--red)", fontSize: "0.68rem" }}>{err}</div>}
+      </div>
+    );
+  }
+
+  if (!formOpen) {
+    return (
+      <button className="btn btn-sm" onClick={(e) => { stop(e); setFormOpen(true); }}>
+        {t("fc_order_mark_ordered")}
+      </button>
+    );
+  }
+
+  return (
+    <div onClick={stop} style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 170 }}>
+      <input type="number" min={0} value={qty} onChange={(e) => setQty(e.target.value)}
+            placeholder={t("fc_order_qty_placeholder")} style={{ width: "100%" }} />
+      <input type="date" value={expected} onChange={(e) => setExpected(e.target.value)}
+            title={t("fc_order_date_placeholder")} style={{ width: "100%" }} />
+      <input type="text" value={note} onChange={(e) => setNote(e.target.value)}
+            placeholder={t("fc_order_note_placeholder")} style={{ width: "100%" }} />
+      <div style={{ display: "flex", gap: 6 }}>
+        <button className="btn btn-sm primary" disabled={busy} onClick={submitMarkOrdered}>
+          {busy ? t("fc_running") : t("fc_order_save")}
+        </button>
+        <button className="btn btn-sm" onClick={(e) => { stop(e); setFormOpen(false); }}>
+          {t("fc_order_cancel")}
+        </button>
+      </div>
+      {err && <div style={{ color: "var(--red)", fontSize: "0.68rem" }}>{err}</div>}
+    </div>
+  );
+}
+
 export default function Forecast() {
   const { t, lang } = useLang();
   const [summary, setSummary] = useState<ForecastSummary | null>(null);
@@ -217,6 +369,12 @@ export default function Forecast() {
   const [q, setQ] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const [methodFilter, setMethodFilter] = useState<string | null>(null);
+  // ownership tier (Item.tier: 1=CPU/VGA/MB/Case, 2=everything purchasing
+  // owns) — a DIFFERENT split from methodFilter's "tier2" (forecasting
+  // method: only the minority with no history, attach-rate/category-avg
+  // derived). Kept as separate state deliberately so the two are never
+  // conflated in the UI the way they were before this was added.
+  const [tierFilter, setTierFilter] = useState<1 | 2 | null>(null);
   const [running, setRunning] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildFlash, setRebuildFlash] = useState<string | null>(null);
@@ -234,6 +392,7 @@ export default function Forecast() {
   const [orders, setOrders] = useState<OrderSuggestions | null>(null);
   const [showOrders, setShowOrders] = useState(false);
   const [orderSearch, setOrderSearch] = useState("");
+  const [showOrderedItems, setShowOrderedItems] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const ordersRef = useRef<HTMLDivElement | null>(null);
 
@@ -269,12 +428,12 @@ export default function Forecast() {
     const timer = setTimeout(() => {
       api
         .forecasts({ q: q || undefined, category: category ?? undefined,
-                   method: methodFilter ?? undefined, limit: 80 })
+                   method: methodFilter ?? undefined, tier: tierFilter ?? undefined, limit: 80 })
         .then(setList)
         .catch((e) => setError(String(e.message ?? e)));
     }, 250);
     return () => clearTimeout(timer);
-  }, [q, category, methodFilter]);
+  }, [q, category, methodFilter, tierFilter]);
 
   const rebuildFromNas = async () => {
     setRebuilding(true);
@@ -336,7 +495,8 @@ export default function Forecast() {
       await loadTier2Preview();
       if (orders) await loadOrders();
       setList(await api.forecasts({ q: q || undefined, category: category ?? undefined,
-                                  method: methodFilter ?? undefined, limit: 80 }));
+                                  method: methodFilter ?? undefined, tier: tierFilter ?? undefined,
+                                  limit: 80 }));
     } catch (e: unknown) {
       setError(String((e as Error).message ?? e));
     } finally {
@@ -419,8 +579,8 @@ export default function Forecast() {
   const monthCols = list?.months.slice(0, 6) ?? [];
 
   const methodLabel = (m: string | null) => {
-    const { base } = parseMethod(m);
-    if (base === null) return t("fc_method_known_plan");
+    const { base, tier2 } = parseMethod(m);
+    if (base === null) return t(tier2 ? "fc_method_tier2_known_plan" : "fc_method_known_plan");
     return METHOD_KEY[base] ? t(METHOD_KEY[base]) : base;
   };
 
@@ -692,20 +852,30 @@ export default function Forecast() {
                 </div>
               </div>
 
-              <div className="toolbar">
+              <div className="toolbar" style={{ alignItems: "center" }}>
                 <input
                   value={orderSearch}
                   onChange={(e) => setOrderSearch(e.target.value)}
                   placeholder={t("fc_orders_search_placeholder")}
                   style={{ minWidth: 260 }}
                 />
+                <label className="dim" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.8rem" }}>
+                  <input type="checkbox" checked={showOrderedItems}
+                        onChange={(e) => setShowOrderedItems(e.target.checked)} />
+                  {t("fc_orders_show_ordered_toggle")}
+                </label>
               </div>
               {(() => {
-                const filtered = orderSearch
+                let filtered = orderSearch
                   ? orders.rows.filter((r) =>
                       r.name.toLowerCase().includes(orderSearch.toLowerCase()),
                     )
                   : orders.rows;
+                if (!showOrderedItems) {
+                  filtered = filtered.filter(
+                    (r) => !r.order_action || r.order_action.awaiting_confirmation,
+                  );
+                }
                 return (
                   <>
                     <div className="tablewrap" style={{ maxHeight: 460 }}>
@@ -718,6 +888,7 @@ export default function Forecast() {
                             <th className="num">{t("fc_orders_th_safety")}</th>
                             <th className="num">{t("fc_orders_th_qty")}</th>
                             <th>{t("fc_orders_th_order_by")}</th>
+                            <th>{t("fc_orders_th_status")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -753,6 +924,11 @@ export default function Forecast() {
                                   )}
                                 </td>
                                 <td className="mono">{fmtMonth(r.order_by, lang)}</td>
+                                <td>
+                                  <OrderActionControl itemId={r.item_id} action={r.order_action}
+                                                      suggestedQty={r.order_qty} onChanged={loadOrders}
+                                                      t={t} lang={lang} />
+                                </td>
                               </tr>
                             );
                           })}
@@ -851,7 +1027,7 @@ export default function Forecast() {
             <div className="hd">
               <div>
                 <div className="eyebrow" style={{ marginBottom: 3 }}>
-                  {lang === "ja" ? "TIER-2 / 購買部門" : "TIER-2 / PURCHASING"}
+                  {lang === "ja" ? "TIER-2 / 推定・派生予測" : "TIER-2 / ESTIMATED, NOT COMMITTED"}
                 </div>
                 <h3>{t("fc_tier2_title")}</h3>
                 <div className="desc">{t("fc_tier2_desc")}</div>
@@ -957,6 +1133,12 @@ export default function Forecast() {
                 {detail.stock
                   ? ` ・ ${t("fc_stock_now")}: ${fmtQty(detail.stock.sap_qty ?? detail.stock.one_balance)}`
                   : ""}
+                {detail.stock?.snapshot_date && (
+                  <span style={isStale(detail.stock.snapshot_date) ? { color: "var(--red)" } : undefined}>
+                    {" "}({t("fc_stock_asof", { date: fmtDate(detail.stock.snapshot_date, lang) })}
+                    {isStale(detail.stock.snapshot_date) ? ` ・ ${t("fc_stock_stale")}` : ""})
+                  </span>
+                )}
               </div>
               {parseMethod(detail.method).discontinuing && (
                 <div className="dim" style={{ fontSize: "0.76rem", marginTop: 4, color: "var(--red)" }}>
@@ -1143,20 +1325,26 @@ export default function Forecast() {
             {detail.suggestion === null ? (
               <div className="banner info">ℹ️ {t("fc_sugg_no_stock")}</div>
             ) : detail.suggestion.action === "suggest_order" ? (
-              <div className="banner warn">
-                📦 <b>{t("fc_sugg_title")}:</b>{" "}
-                {t("fc_sugg_body", {
-                  breach: fmtMonth(
-                    detail.forecast[detail.suggestion.breach_month_index ?? 0]?.month ?? "",
-                    lang,
-                  ),
-                  safety: fmtQty(detail.suggestion.safety_stock),
-                  qty: fmtQty(detail.suggestion.suggested_qty),
-                  order_by: fmtMonth(
-                    detail.forecast[detail.suggestion.order_by_month_index ?? 0]?.month ?? "",
-                    lang,
-                  ),
-                })}
+              <div className="banner warn" style={{ display: "flex", justifyContent: "space-between",
+                                                     alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+                <div>
+                  📦 <b>{t("fc_sugg_title")}:</b>{" "}
+                  {t("fc_sugg_body", {
+                    breach: fmtMonth(
+                      detail.forecast[detail.suggestion.breach_month_index ?? 0]?.month ?? "",
+                      lang,
+                    ),
+                    safety: fmtQty(detail.suggestion.safety_stock),
+                    qty: fmtQty(detail.suggestion.suggested_qty),
+                    order_by: fmtMonth(
+                      detail.forecast[detail.suggestion.order_by_month_index ?? 0]?.month ?? "",
+                      lang,
+                    ),
+                  })}
+                </div>
+                <OrderActionControl itemId={detail.item.id} action={detail.suggestion.order_action ?? null}
+                                    suggestedQty={detail.suggestion.suggested_qty ?? 0}
+                                    onChanged={() => openDetail(detail.item.id)} t={t} lang={lang} />
               </div>
             ) : (
               <div className="banner info">✅ {t("fc_sugg_none")}</div>
@@ -1242,6 +1430,20 @@ export default function Forecast() {
               {t("fc_kpi_tier2")} ✕
             </button>
           )}
+          <button
+            className={"chip" + (tierFilter === 1 ? " on" : "")}
+            onClick={() => setTierFilter(tierFilter === 1 ? null : 1)}
+            title={t("fc_tier_filter_1_tooltip")}
+          >
+            {t("fc_tier_filter_1")}
+          </button>
+          <button
+            className={"chip" + (tierFilter === 2 ? " on" : "")}
+            onClick={() => setTierFilter(tierFilter === 2 ? null : 2)}
+            title={t("fc_tier_filter_2_tooltip")}
+          >
+            {t("fc_tier_filter_2")}
+          </button>
           <span style={{ flex: 1 }} />
           <span className="dim" style={{ fontSize: "0.74rem" }}>
             {t("fc_confidence_legend")}
@@ -1265,6 +1467,7 @@ export default function Forecast() {
                   <tr>
                     <th>{t("fc_th_item")}</th>
                     <th>{t("fc_th_category")}</th>
+                    <th>{t("fc_th_tier")}</th>
                     <th>{t("fc_th_method")}</th>
                     <th>{t("fc_th_last_active")}</th>
                     <th className="num">{t("fc_th_wape")}</th>
@@ -1302,6 +1505,11 @@ export default function Forecast() {
                         {discontinuing && <DiscontinuingBadge label={t("fc_discontinuing_badge")} />}
                       </td>
                       <td className="dim">{r.category ?? "—"}</td>
+                      <td>
+                        <span className={"order-action-badge" + (r.tier === 1 ? " awaiting" : "")}>
+                          {r.tier === 1 ? t("fc_tier_filter_1") : r.tier === 2 ? t("fc_tier_filter_2") : "—"}
+                        </span>
+                      </td>
                       <td className="dim">{methodLabel(r.method)}</td>
                       <td className="dim">
                         {r.last_active_month ? fmtMonth(r.last_active_month, lang) : "—"}

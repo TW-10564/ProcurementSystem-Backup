@@ -103,11 +103,62 @@ body {
 
 :root {
   --rail-w: 68px;
+  --rail-w-expanded: 250px;
+  --header-h: 56px;
 }
 
 .app-shell {
   display: flex;
   min-height: 100vh;
+}
+
+.top-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px 0 10px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  z-index: 50;
+  box-shadow: var(--shadow);
+}
+
+/* three-wave brand stripe across the very top of the header */
+.top-header::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--wave-stripe);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-logo-link {
+  display: flex;
+  align-items: center;
+  line-height: 0;
+  opacity: 1;
+  transition: opacity 0.13s;
+}
+.header-logo-link:hover {
+  opacity: 0.82;
+}
+.header-logo {
+  height: 30px;
+  width: auto;
+  display: block;
 }
 
 .sidebar {
@@ -120,9 +171,9 @@ body {
   flex-direction: column;
   align-items: center;
   position: fixed;
-  top: 0;
+  top: var(--header-h);
   left: 0;
-  height: 100vh;
+  height: calc(100vh - var(--header-h));
   /* deliberately NOT overflow:auto — an auto/scroll container clips in
      BOTH axes per spec, which would cut off the tooltips below. The nav
      list is short enough (7 items) to fit every real viewport without
@@ -130,36 +181,20 @@ body {
   overflow: visible;
   z-index: 40;
   box-shadow: var(--shadow);
+  transition: width 0.16s ease;
 }
 
-/* three-wave brand stripe across the very top of the sidebar */
-.sidebar::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: var(--wave-stripe);
-}
-
-.brand-mark {
-  flex-shrink: 0;
-  margin-bottom: 18px;
-}
-.brand-mark .badge {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--brand-500), var(--brand));
-  color: #fff;
-  font-weight: 800;
-  font-size: 0.78rem;
-  letter-spacing: -0.02em;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 6px rgba(30, 33, 136, 0.3);
+/* expanded drawer state — triggered by hovering/focusing the rail itself
+   (see Layout.tsx's onMouseEnter/onFocus), not a separate toggle button.
+   Overlays the page rather than pushing .main, so content behind it
+   doesn't reflow while it's open, and collapses again as soon as the
+   pointer/focus leaves. */
+.sidebar.expanded {
+  width: var(--rail-w-expanded);
+  align-items: stretch;
+  padding: 16px 10px 20px;
+  overflow-y: auto;
+  z-index: 55;
 }
 
 .nav-scroll {
@@ -168,6 +203,19 @@ body {
   align-items: center;
   gap: 4px;
   width: 100%;
+}
+
+.sidebar.expanded .nav-scroll {
+  align-items: stretch;
+}
+
+.nav-group-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 10px 6px;
 }
 
 .nav-group + .nav-group {
@@ -190,9 +238,24 @@ body {
   transition: background 0.13s, color 0.13s;
 }
 
+.sidebar.expanded .nav-link {
+  width: 100%;
+  height: auto;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+}
+
+.nav-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .nav-icon {
-  font-size: 1.2rem;
-  line-height: 1;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
 }
 
 .nav-link:hover {
@@ -215,6 +278,10 @@ body {
   width: 3px;
   border-radius: 999px;
   background: var(--brand);
+}
+
+.sidebar.expanded .nav-link.active::before {
+  left: -8px;
 }
 
 /* the name, shown before the icon takes you there — a floating tooltip
@@ -254,21 +321,12 @@ body {
 
 .lang-toggle {
   display: inline-flex;
+  flex-shrink: 0;
   background: var(--line2);
-  border-radius: 8px;
-  padding: 2px;
-  gap: 2px;
-}
-
-.lang-toggle-float {
-  position: fixed;
-  top: 16px;
-  right: 20px;
-  z-index: 50;
-  background: var(--card);
-  box-shadow: var(--shadow-lift);
   border: 1px solid var(--line);
+  border-radius: 999px;
   padding: 3px;
+  gap: 2px;
 }
 
 .lang-toggle button {
@@ -276,19 +334,25 @@ body {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-weight: 700;
-  font-size: 0.73rem;
-  padding: 5px 10px;
-  flex: 1;
-  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+  padding: 6px 14px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  border-radius: 999px;
   cursor: pointer;
-  transition: 0.13s;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.lang-toggle button:hover:not(.on) {
+  color: var(--ink);
 }
 
 .lang-toggle button.on {
-  background: var(--brand);
+  background: linear-gradient(135deg, var(--brand-500), var(--brand));
   color: #fff;
-  box-shadow: 0 1px 3px rgba(30, 33, 136, 0.35);
+  box-shadow: 0 2px 6px rgba(30, 33, 136, 0.32);
 }
 
 /* full-bleed content — this is a data dashboard (tables, KPI grids), not an
@@ -298,7 +362,8 @@ body {
   flex: 1;
   min-width: 0;
   margin-left: var(--rail-w);
-  padding: 68px clamp(20px, 3vw, 48px) 64px;
+  margin-top: var(--header-h);
+  padding: 28px clamp(20px, 3vw, 48px) 64px;
   animation: page-in 0.25s ease-out;
 }
 
@@ -322,8 +387,111 @@ body {
 @media (max-width: 720px) {
   :root { --rail-w: 56px; }
   .nav-link { width: 38px; height: 38px; }
-  .main { padding: 64px 16px 40px; }
-  .lang-toggle-float { top: 10px; right: 12px; }
+  .main { padding: 24px 16px 40px; }
+}
+
+/* ── Landing page ───────────────────────────────────────────────────── */
+.landing {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(160deg, #eef1ff 0%, #f7f9ff 45%, #ffffff 100%);
+  position: relative;
+}
+
+.landing-toggle {
+  display: inline-flex;
+  gap: 8px;
+  margin: 28px 0 0 32px;
+}
+.landing-toggle button {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.8rem;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: 0.13s;
+}
+.landing-toggle button.on {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.landing-body {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 64px;
+  padding: 40px 32px 80px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.landing-copy {
+  max-width: 480px;
+}
+.landing-copy h1 {
+  font-size: clamp(2rem, 4vw, 2.7rem);
+  font-weight: 800;
+  line-height: 1.2;
+  margin: 0 0 18px;
+  color: var(--ink);
+}
+.landing-copy h1 .accent {
+  color: var(--brand);
+  display: block;
+}
+.landing-copy p {
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.landing-card {
+  width: 340px;
+  max-width: 100%;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lift);
+  padding: 32px 28px;
+  text-align: center;
+}
+.landing-card h2 {
+  margin: 0 0 20px;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+.landing-enter-btn {
+  width: 100%;
+  border: 0;
+  background: linear-gradient(135deg, var(--brand-500), var(--brand));
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.95rem;
+  padding: 13px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(30, 33, 136, 0.28);
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+.landing-enter-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(30, 33, 136, 0.34);
+}
+.landing-enter-note {
+  margin-top: 14px;
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
 /* ── page head ──────────────────────────────────────────────────────── */
@@ -595,6 +763,49 @@ tbody tr:last-child td {
 .btn.danger:hover {
   border-color: var(--red);
   box-shadow: 0 1px 4px rgba(209, 52, 56, 0.15);
+}
+
+.btn-sm {
+  padding: 4px 9px;
+  font-size: 0.72rem;
+  border-radius: 6px;
+}
+
+.btn-link {
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.btn-link:hover {
+  color: var(--brand-600);
+}
+.btn-link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-link.danger {
+  color: var(--red);
+}
+
+.order-action-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--line2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.order-action-badge.awaiting {
+  background: rgba(217, 119, 6, 0.14);
+  color: #b45309;
 }
 
 /* ── forms ──────────────────────────────────────────────────────────── */

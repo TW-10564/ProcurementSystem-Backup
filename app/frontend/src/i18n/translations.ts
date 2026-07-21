@@ -4,6 +4,19 @@ export const translations = {
   brand_name: { ja: "調達予測ポータル", en: "Procurement Forecast Portal" },
   brand_sub: { ja: "需要予測・購買意思決定支援", en: "Demand forecasting & buying decision support" },
 
+  landing_headline_1: { ja: "需要予測を、", en: "Stay ahead of " },
+  landing_headline_2: { ja: "確信を持って。", en: "your demand." },
+  landing_desc: {
+    ja: "調達予測ポータル — CPU・MB・VGA・Caseの需要予測から発注提案、部材整合性チェックまで、購買判断を一元的に支援します。",
+    en: "The Procurement Forecast Portal supports buying decisions end to end — from CPU/MB/VGA/Case demand forecasts to order suggestions and parts-compatibility checks.",
+  },
+  landing_enter_title: { ja: "はじめる", en: "Get started" },
+  landing_enter_button: { ja: "ポータルに入る", en: "Enter the portal" },
+  landing_enter_note: {
+    ja: "現在パイロット運用中のため、サインインは無効化されています。",
+    en: "Sign-in is disabled during this pilot deployment.",
+  },
+
   nav_section_overview: { ja: "概要", en: "Overview" },
   nav_dashboard: { ja: "ダッシュボード", en: "Dashboard" },
   nav_section_accuracy: { ja: "予測・精度", en: "Forecast & Accuracy" },
@@ -341,6 +354,20 @@ export const translations = {
   },
   fc_orders_search_placeholder: { ja: "部材名で絞り込み...", en: "Filter by item name..." },
   fc_orders_showing: { ja: "{shown} / {total} 件を表示", en: "Showing {shown} of {total}" },
+  fc_orders_th_status: { ja: "発注状況", en: "Order status" },
+  fc_orders_show_ordered_toggle: { ja: "発注済みも表示", en: "Show already-ordered" },
+
+  fc_order_mark_ordered: { ja: "発注済みにする", en: "Mark as ordered" },
+  fc_order_ordered_badge: { ja: "発注済み", en: "Ordered" },
+  fc_order_awaiting_confirmation: { ja: "到着確認待ち", en: "Awaiting confirmation" },
+  fc_order_confirm_received: { ja: "受領確認", en: "Confirm received" },
+  fc_order_dismiss: { ja: "取消", en: "Dismiss" },
+  fc_order_qty_placeholder: { ja: "発注数量", en: "Qty ordered" },
+  fc_order_date_placeholder: { ja: "到着予定日", en: "Expected arrival" },
+  fc_order_note_placeholder: { ja: "メモ（任意）", en: "Note (optional)" },
+  fc_order_save: { ja: "保存", en: "Save" },
+  fc_order_cancel: { ja: "キャンセル", en: "Cancel" },
+  fc_order_ordered_by: { ja: "{who}が発注済みに設定", en: "Marked ordered by {who}" },
   fc_kpi_wape: { ja: "検証精度（WAPE）", en: "Validated accuracy (WAPE)" },
   fc_kpi_wape_sub: {
     ja: "直近6か月ホールドアウト・{n}SKU（単純平均: {naive}%）",
@@ -360,10 +387,10 @@ export const translations = {
     ja: "実績なしの部材向けに、Tier-1需要との相関から自動で導出した予測（SKU別統計モデルの対象外）",
     en: "Forecasts auto-derived from Tier-1 demand correlation for parts the SKU statistical model can't reach",
   },
-  fc_tier2_title: { ja: "Tier-2 派生予測（購買部門）", en: "Tier-2 derived forecasts (Purchasing)" },
+  fc_tier2_title: { ja: "Tier-2 派生予測（実績データなし）", en: "Tier-2 derived forecasts (no history of their own)" },
   fc_tier2_desc: {
-    ja: "計画部門が計画するCPU/マザーボード/GPU/ケース以外の部材。Tier-1需要との相関から自動導出",
-    en: "Everything outside planning's CPU/MB/GPU/Case scope — auto-derived from Tier-1 demand correlation",
+    ja: "「購買部門（その他全部材）」のごく一部 — 自部材の実績が無く、Tier-1需要との相関から自動推定した部材のみ。他の大多数は実績データに基づく確定予測です。",
+    en: "A small SUBSET of \"Purchasing dept (everything else)\" below — only parts with no history of their own, auto-estimated from Tier-1 demand correlation. Most of that group has a real committed forecast instead.",
   },
   fc_tier2_attach: { ja: "実績相関（attach-rate）", en: "Own-history attach-rate" },
   fc_tier2_category: { ja: "カテゴリ平均推定", en: "Category-average estimate" },
@@ -373,6 +400,17 @@ export const translations = {
   fc_cat_title: { ja: "カテゴリ別の必要数量", en: "Required quantity by category" },
   fc_cat_desc: { ja: "行をクリックすると下の一覧を絞り込みます", en: "Click a row to filter the list below" },
   fc_th_category: { ja: "カテゴリ", en: "Category" },
+  fc_th_tier: { ja: "区分", en: "Tier" },
+  fc_tier_filter_1: { ja: "計画部門（4部材）", en: "Planning dept (4 parts)" },
+  fc_tier_filter_1_tooltip: {
+    ja: "経営企画部が直接計画する4カテゴリ（CPU・グラフィックカード・マザーボード・ケース）のみ表示",
+    en: "Show only the 4 categories 経営企画部 plans directly: CPU, GPU, motherboard, case",
+  },
+  fc_tier_filter_2: { ja: "購買部門（その他全部材）", en: "Purchasing dept (everything else)" },
+  fc_tier_filter_2_tooltip: {
+    ja: "上記4カテゴリ以外、購買部門が管理する全部材を表示。多くは実績データに基づく確定予測で、Tier-2派生予測はその一部です。",
+    en: "Every part outside those 4 categories, owned by purchasing. Most still have a real committed forecast — Tier-2 derived forecasts are only a subset of this.",
+  },
   fc_th_items: { ja: "SKU数", en: "SKUs" },
   fc_th_next3: { ja: "3か月合計", en: "Next 3 mo" },
   fc_th_next6: { ja: "6か月合計", en: "Next 6 mo" },
@@ -426,6 +464,10 @@ export const translations = {
     en: "Category-average attach rate (no history — estimated from category peers)",
   },
   fc_method_known_plan: { ja: "確定済み計画値", en: "Confirmed plan value" },
+  fc_method_tier2_known_plan: {
+    ja: "確定済み計画値（派生カテゴリ・精度未検証）",
+    en: "Confirmed plan value (derived category — accuracy not validated)",
+  },
   fc_discontinuing_badge: { ja: "終息の可能性", en: "Likely discontinuing" },
   fc_discontinuing_tooltip: {
     ja: "確定済みの計画値が2ヶ月以上ゼロになった後、通常の統計予測に戻らないよう抑制しています。",
@@ -495,6 +537,8 @@ export const translations = {
   fc_lead: { ja: "リードタイム", en: "Lead time" },
   fc_lead_days: { ja: "{n}日", en: "{n} days" },
   fc_lead_observed: { ja: "実績{n}件の中央値", en: "observed median, {n} deliveries" },
+  fc_stock_asof: { ja: "{date}時点", en: "as of {date}" },
+  fc_stock_stale: { ja: "更新遅延", en: "stale" },
 
   // Mismatch
   mismatch_title: { ja: "部材ミスマッチ検知", en: "Parts Mismatch Detection" },

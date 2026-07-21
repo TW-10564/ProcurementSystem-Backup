@@ -272,6 +272,17 @@ export interface ForecastList {
   rows: ForecastRow[];
 }
 
+export interface OrderActionInfo {
+  id: number;
+  status: "ordered" | "received" | "dismissed";
+  qty_ordered: number | null;
+  expected_arrival_date: string | null;
+  note: string | null;
+  ordered_by: string | null;
+  ordered_at: string | null;
+  awaiting_confirmation: boolean;
+}
+
 export interface OrderSuggestionRow {
   item_id: number;
   name: string;
@@ -285,6 +296,7 @@ export interface OrderSuggestionRow {
   breach_month: string;
   moq_excessive: boolean;
   moq_months_of_cover: number | null;
+  order_action: OrderActionInfo | null;
 }
 
 export interface OrderSuggestions {
@@ -350,6 +362,7 @@ export interface ForecastDetail {
     current_balance?: number;
     projected?: number[];
     reason?: string;
+    order_action?: OrderActionInfo | null;
   } | null;
 }
 

@@ -96,7 +96,7 @@ def run_plausibility_check(days_back: int = 90, limit: int = 15) -> dict:
     adjustments = _latest_adjustments(session)
     comparisons = []
     for sku, plist in recent_pos.items():
-        item = resolve(session, sku)
+        item = resolve(session, sku, prefer_source="ONE綽名")
         if item is None:
             continue
         sugg = generate_for_item(session, item, adjustments)

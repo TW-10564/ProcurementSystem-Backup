@@ -10,7 +10,7 @@ Run:  cd app/backend && uvicorn onefcst.api.main:app --host 0.0.0.0 --port 8600
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,15 +20,17 @@ from sqlalchemy.orm import Session
 from .. import scheduler as scheduler_mod
 from ..config import CORS_ORIGINS
 from ..db import get_session
-from ..models import Item, CompatRule, Adjustment, Suggestion
+from ..models import Item, Suggestion
 from ..advisory import rules as rules_svc
 from ..advisory import adjustments as adj_svc
 from ..advisory import notifications as notif_svc
 from ..advisory import discontinuation_review as discontinuation_svc
+from ..advisory import order_actions as order_svc
 from .auth import require_api_key
 from .schemas import (CompatRuleOut, ConfirmRequest, RejectRequest,
                       EditRuleRequest, AdjustmentIn, AdjustmentOut,
-                      NotificationOut, DiscontinuationSuggestionOut)
+                      NotificationOut, DiscontinuationSuggestionOut,
+                      OrderActionOut, MarkOrderedRequest, ExtendDateRequest)
 
 
 @asynccontextmanager
@@ -225,6 +227,58 @@ def reject_discontinuation(suggestion_id: int, body: RejectRequest,
     return _discontinuation_out(s)
 
 
+# ------------------------------------------------------------ order actions
+@app.post("/order-actions/{item_id}/mark-ordered", response_model=OrderActionOut)
+def mark_ordered(item_id: int, body: MarkOrderedRequest, session: Session = Depends(db)):
+    item = session.get(Item, item_id)
+    if item is None:
+        raise HTTPException(404, f"item {item_id} not found")
+    try:
+        oa = order_svc.mark_ordered(session, item, qty_ordered=body.qty_ordered,
+                                    expected_arrival_date=body.expected_arrival_date,
+                                    note=body.note, author=body.author)
+    except order_svc.OrderActionAlreadyActive as e:
+        raise HTTPException(409, str(e))
+    return oa
+
+
+@app.post("/order-actions/{order_action_id}/extend", response_model=OrderActionOut)
+def extend_order_action(order_action_id: int, body: ExtendDateRequest,
+                        session: Session = Depends(db)):
+    try:
+        oa = order_svc.extend_expected_date(session, order_action_id,
+                                            body.expected_arrival_date, body.author)
+    except order_svc.OrderActionNotFound as e:
+        raise HTTPException(404, str(e))
+    except order_svc.OrderActionNotActive as e:
+        raise HTTPException(409, str(e))
+    return oa
+
+
+@app.post("/order-actions/{order_action_id}/confirm-received", response_model=OrderActionOut)
+def confirm_order_received(order_action_id: int, body: ConfirmRequest,
+                           session: Session = Depends(db)):
+    try:
+        oa = order_svc.confirm_received(session, order_action_id, body.author)
+    except order_svc.OrderActionNotFound as e:
+        raise HTTPException(404, str(e))
+    except order_svc.OrderActionNotActive as e:
+        raise HTTPException(409, str(e))
+    return oa
+
+
+@app.post("/order-actions/{order_action_id}/dismiss", response_model=OrderActionOut)
+def dismiss_order_action(order_action_id: int, body: RejectRequest,
+                         session: Session = Depends(db)):
+    try:
+        oa = order_svc.dismiss(session, order_action_id, body.author, body.reason)
+    except order_svc.OrderActionNotFound as e:
+        raise HTTPException(404, str(e))
+    except order_svc.OrderActionNotActive as e:
+        raise HTTPException(409, str(e))
+    return oa
+
+
 @app.post("/compat-rules/bulk-confirm")
 def bulk_confirm(author: str, threshold: float = 0.9, session: Session = Depends(db)):
     n = rules_svc.bulk_confirm_high_confidence(session, author, threshold)
@@ -315,10 +369,11 @@ def forecast_summary(session: Session = Depends(db)):
 
 @app.get("/forecasts")
 def list_forecasts(q: str = "", category: str | None = None, method: str | None = None,
-                   limit: int = 50, offset: int = 0, session: Session = Depends(db)):
+                   tier: int | None = None, limit: int = 50, offset: int = 0,
+                   session: Session = Depends(db)):
     from .. import forecast_views
     return forecast_views.list_forecasts(session, q=q, category=category, method=method,
-                                         limit=limit, offset=offset)
+                                         tier=tier, limit=limit, offset=offset)
 
 
 @app.get("/forecasts/order-suggestions")

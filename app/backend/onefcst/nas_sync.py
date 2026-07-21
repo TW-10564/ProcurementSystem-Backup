@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import base64
 import subprocess
-import tempfile
 from pathlib import Path
 
 from .config import ONE_DIR

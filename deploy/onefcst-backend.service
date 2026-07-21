@@ -1,0 +1,38 @@
+[Unit]
+Description=onefcst API backend (Forecasting & Procurement Decision Support)
+After=network.target
+# If Postgres is on the same box, uncomment so the backend doesn't start
+# racing it on boot:
+# After=network.target postgresql.service
+# Requires=postgresql.service
+
+[Service]
+Type=simple
+# Adjust these two paths for the real DGX checkout location.
+WorkingDirectory=/opt/onefcst/app/backend
+EnvironmentFile=/opt/onefcst/app/backend/.env.production
+
+# Bound to loopback only — nginx (see deploy/nginx-onefcst.conf) is the
+# only thing that should reach this directly. Never bind 0.0.0.0 here once
+# a reverse proxy is in front; the whole point is that the backend is not
+# itself internet/network-reachable.
+ExecStart=/opt/onefcst/app/backend/.venv/bin/python -m uvicorn onefcst.api.main:app \
+    --host 127.0.0.1 --port 8600
+
+Restart=on-failure
+RestartSec=3
+
+# Hardening — the backend never needs to write outside its own data dir.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/onefcst/app/data
+ProtectHome=true
+
+# Run as a dedicated non-root user (create with:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin onefcst
+# and chown /opt/onefcst accordingly before enabling this unit).
+User=onefcst
+Group=onefcst
+
+[Install]
+WantedBy=multi-user.target

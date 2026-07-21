@@ -287,7 +287,7 @@ export default function Adjustments() {
                     <div className="grow">
                       <div className="ttl">
                         {a.item_id ? (
-                          <Link to={`/forecast?item=${a.item_id}`} title={t("adj_view_in_forecast")}>
+                          <Link to={`/app/forecast?item=${a.item_id}`} title={t("adj_view_in_forecast")}>
                             {a.item_name ?? `#${a.item_id}`}
                           </Link>
                         ) : (

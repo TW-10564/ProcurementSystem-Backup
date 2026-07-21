@@ -285,12 +285,12 @@ def run() -> dict:
         snap_s = _snapshot(session, srcpath, "部品詳細",
                            len(result["series"]) + len(result["stock"]), "PASS", st["note"])
         for p in result["series"]:
-            item = resolve_any(session, norm_index, p["adana"])
+            item = resolve_any(session, norm_index, p["adana"], prefer_source="ONE綽名")
             session.add(PlanValue(snapshot_id=snap_s.id, item_id=item.id if item else None,
                                   raw_name=p["adana"], month=p["month"], level="one_row",
                                   value=p["value"], source_cell=p["cell"]))
         for s in result["stock"]:
-            item = resolve_any(session, norm_index, s["adana"])
+            item = resolve_any(session, norm_index, s["adana"], prefer_source="ONE綽名")
             session.add(StockState(item_id=item.id if item else None, raw_name=s["adana"],
                                    snapshot_date=s["snapshot"], one_balance=s["balance"],
                                    one_stock_days=s["days"], safety_days=s["safety_days"],
@@ -299,6 +299,9 @@ def run() -> dict:
         total_stock += len(result["stock"])
         print(f"  [{cat:<11}] skus={st['skus']:>3}/{st['expected_skus']:<3} "
               f"series_cells={len(result['series']):>5}  stock_rows={len(result['stock']):>3}")
+        if st.get("excluded_incomplete_months"):
+            print(f"    excluded partial-coverage months (file's own column "
+                  f"range clips into these): {', '.join(st['excluded_incomplete_months'])}")
     print(f"[sub-files] total series cells={total_series}  stock rows={total_stock}")
 
     # 6. SAP physical stock
@@ -321,11 +324,11 @@ def run() -> dict:
         for row in sap_result["rows"]:
             item = None
             if row["syocode"]:
-                item = resolve_any(session, norm_index, row["syocode"])
+                item = resolve_any(session, norm_index, row["syocode"], prefer_source="商品コード")
                 if item is not None:
                     matched_via_syocode += 1
             if item is None and row["adana"]:
-                item = resolve_any(session, norm_index, row["adana"])
+                item = resolve_any(session, norm_index, row["adana"], prefer_source="ONE綽名")
                 if item is not None:
                     matched_via_adana += 1
             if item is None:

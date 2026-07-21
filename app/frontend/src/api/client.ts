@@ -12,6 +12,7 @@ import type {
   LlmDraftResult,
   MismatchReport,
   Notification,
+  OrderActionInfo,
   OrderSuggestions,
   PlannerAccuracy,
   PlanVsActual,
@@ -35,8 +36,6 @@ const http = axios.create({
 });
 
 export const api = {
-  health: () => http.get("/health").then((r) => r.data),
-
   compatRules: (params?: { status?: string; min_confidence?: number }) =>
     http.get<CompatRule[]>("/compat-rules", { params }).then((r) => r.data),
 
@@ -72,6 +71,27 @@ export const api = {
   rejectDiscontinuation: (id: number, author: string, reason: string) =>
     http
       .post<DiscontinuationSuggestion>(`/discontinuation-suggestions/${id}/reject`, { author, reason })
+      .then((r) => r.data),
+
+  markOrdered: (
+    itemId: number,
+    body: { author: string; qty_ordered?: number; expected_arrival_date?: string; note?: string },
+  ) =>
+    http.post<OrderActionInfo>(`/order-actions/${itemId}/mark-ordered`, body).then((r) => r.data),
+
+  extendOrderAction: (orderActionId: number, author: string, expected_arrival_date: string) =>
+    http
+      .post<OrderActionInfo>(`/order-actions/${orderActionId}/extend`, { author, expected_arrival_date })
+      .then((r) => r.data),
+
+  confirmOrderReceived: (orderActionId: number, author: string) =>
+    http
+      .post<OrderActionInfo>(`/order-actions/${orderActionId}/confirm-received`, { author })
+      .then((r) => r.data),
+
+  dismissOrderAction: (orderActionId: number, author: string, reason: string = "") =>
+    http
+      .post<OrderActionInfo>(`/order-actions/${orderActionId}/dismiss`, { author, reason })
       .then((r) => r.data),
 
   bulkConfirm: (author: string, threshold: number) =>
@@ -123,8 +143,9 @@ export const api = {
   forecastSummary: () =>
     http.get<ForecastSummary>("/forecasts/summary").then((r) => r.data),
 
-  forecasts: (params?: { q?: string; category?: string; method?: string; limit?: number; offset?: number }) =>
-    http.get<ForecastList>("/forecasts", { params }).then((r) => r.data),
+  forecasts: (
+    params?: { q?: string; category?: string; method?: string; tier?: number; limit?: number; offset?: number },
+  ) => http.get<ForecastList>("/forecasts", { params }).then((r) => r.data),
 
   forecastDetail: (itemId: number) =>
     http.get<ForecastDetail>(`/forecasts/${itemId}`).then((r) => r.data),

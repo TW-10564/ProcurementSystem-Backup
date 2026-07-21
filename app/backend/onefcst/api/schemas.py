@@ -37,6 +37,34 @@ class DiscontinuationSuggestionOut(BaseModel):
         from_attributes = True
 
 
+class OrderActionOut(BaseModel):
+    id: int
+    item_id: int
+    status: str
+    qty_ordered: float | None = None
+    expected_arrival_date: date | None = None
+    note: str | None = None
+    ordered_by: str | None = None
+    ordered_at: datetime | None = None
+    received_by: str | None = None
+    received_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class MarkOrderedRequest(BaseModel):
+    author: str = Field(..., min_length=1)
+    qty_ordered: float | None = None
+    expected_arrival_date: date | None = None
+    note: str = ""
+
+
+class ExtendDateRequest(BaseModel):
+    author: str = Field(..., min_length=1)
+    expected_arrival_date: date
+
+
 class ConfirmRequest(BaseModel):
     author: str = Field(..., min_length=1)
 

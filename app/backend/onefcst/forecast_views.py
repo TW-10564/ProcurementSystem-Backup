@@ -29,6 +29,7 @@ from .models import (AccuracyScore, Actual, Adjustment, Forecast, ForecastRun,
                     Item, PlanValue, Snapshot, StockState, WeeklyActual)
 from .engine.stock_projection import suggest_order
 from .engine.weekly import disaggregate_forecast
+from .advisory import order_actions as order_svc
 
 WEEKLY_HORIZON_MONTHS = 3   # near-term months shown at weekly resolution —
                             # matches the M+1/M+2 horizon buyers actually act on
@@ -272,6 +273,17 @@ def effective_lead_time(item: Item) -> float | None:
     return item.lead_time_days
 
 
+def _order_action_out(oa, today: date) -> dict:
+    return {
+        "id": oa.id, "status": oa.status, "qty_ordered": oa.qty_ordered,
+        "expected_arrival_date": (oa.expected_arrival_date.isoformat()
+                                 if oa.expected_arrival_date else None),
+        "note": oa.note, "ordered_by": oa.ordered_by,
+        "ordered_at": oa.ordered_at.isoformat() if oa.ordered_at else None,
+        "awaiting_confirmation": bool(oa.expected_arrival_date and oa.expected_arrival_date <= today),
+    }
+
+
 def _suggestion(item: Item, stock: StockState | None, demand: list[float]) -> dict | None:
     balance, confidence = trusted_current_balance(stock)
     if balance is None:
@@ -369,6 +381,8 @@ def order_suggestions(session) -> dict:
     items = {i.id: i for i in session.query(Item).all()}
     stocks = _stock_by_item(session)
     adjustments = _latest_adjustments(session)
+    active_order_actions = order_svc.list_active(session)
+    today = date.today()
 
     rows = []
     for item_id, frows in by_item.items():
@@ -383,6 +397,8 @@ def order_suggestions(session) -> dict:
         sugg = _suggestion(item, stock, qtys)
         if not sugg or sugg["action"] != "suggest_order":
             continue
+        oa = active_order_actions.get(item_id)
+        order_action = _order_action_out(oa, today) if oa is not None else None
         rows.append({
             "item_id": item_id, "name": item.canonical_name, "category": item.category,
             "method": frows[0].method,
@@ -394,6 +410,7 @@ def order_suggestions(session) -> dict:
             "breach_month": months[sugg["breach_month_index"]],
             "moq_excessive": sugg.get("moq_excessive", False),
             "moq_months_of_cover": sugg.get("moq_months_of_cover"),
+            "order_action": order_action,
         })
     rows.sort(key=lambda r: (r["order_by"], -r["order_qty"]))
 
@@ -419,11 +436,20 @@ def order_suggestions(session) -> dict:
 
 
 def list_forecasts(session, q: str = "", category: str | None = None,
-                   method: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+                   method: str | None = None, tier: int | None = None,
+                   limit: int = 50, offset: int = 0) -> dict:
     """method: exact method string, or the shorthand "tier2" to match
     either derived method (tier2_attach_rate / tier2_category_average) —
     lets the UI isolate "how many parts came from the accessory-derivation
-    path" instead of them being scattered through a volume-sorted list."""
+    path" instead of them being scattered through a volume-sorted list.
+
+    tier: filters by Item.tier (1 = one of TIER1_CATEGORIES i.e. CPU/VGA/
+    MB/Case, 2 = everything else) — a DIFFERENT split from `method`'s
+    "tier2" shorthand above. tier=2 is every item purchasing (not
+    経営企画部) owns, most of which still get a real per-SKU forecast from
+    their own history; method="tier2" is only the minority with no history
+    at all, falling back to attach-rate/category-average derivation. Do not
+    conflate the two — see project memory on this exact distinction."""
     run = _latest_run(session)
     if run is None:
         return {"run": None, "total": 0, "months": [], "rows": []}
@@ -443,6 +469,8 @@ def list_forecasts(session, q: str = "", category: str | None = None,
         item_q = item_q.filter(Item.canonical_name.ilike(f"%{q}%"))
     if category:
         item_q = item_q.filter(Item.category == category)
+    if tier is not None:
+        item_q = item_q.filter(Item.tier == tier)
     items = item_q.all()
     last_active = _last_active_month_by_item(session, (i.id for i in items))
 
@@ -561,6 +589,9 @@ def item_detail(session, item_id: int) -> dict | None:
 
     stock = _latest_stock_state(session, item_id)
     sugg = _suggestion(item, stock, [f["qty"] or 0.0 for f in forecast])
+    if sugg is not None:
+        oa = order_svc.get_active(session, item_id)
+        sugg["order_action"] = _order_action_out(oa, date.today()) if oa is not None else None
     wape = None
     wape_full_horizon = None
     if run:

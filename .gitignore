@@ -6,15 +6,21 @@ ONE/
 SAP在庫(ZM13)0629.xlsx
 販売計画6月提出分_2026年6月~2026年11月.xlsx
 調達AI支援システム 要件アンケート(1-31).xlsx
+SAP在庫抽出.db
+
+# ── NAS-synced planning/SAP source directories (confidential, read-only inputs
+#    per config.py's PLANNING_DIR/SAP_DIR — never source of truth in git) ─────
+data/planning/
+data/sap/
 
 # ── Binary / Word versions of docs (source-of-truth is the .md / .xlsx) ───────
 Purchasing Team Function Survey.docx
 Project_Charter_Phase1_FILLED.docx
 
-# ── Generated outputs from the consolidation engine ───────────────────────────
-consolidation/consolidated.db
-consolidation/*.xlsx
-consolidation/anomaly_findings_history.json
+# ── Generated exports / regenerated DBs (always rebuilt, never source of truth)
+app/data/onefcst.db
+app/data/exports/
+data/exports/
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
@@ -33,3 +39,9 @@ desktop.ini
 # environment files (API keys) — never commit
 .env
 app/backend/.env
+app/backend/.env.production
+app/frontend/.env.production
+
+# deploy/ TLS output, if ever generated inside the repo checkout instead of
+# /etc/onefcst/tls (see deploy/generate-self-signed-cert.sh)
+deploy/tls/

@@ -136,7 +136,7 @@ def test_api_serves_the_stored_run(client, session):
     assert len(lst["months"]) == note["horizon"]
 
     top = lst["rows"][0]
-    assert top["next12_total"] == round(sum(top["qty"][:12]))
+    assert top["next6_total"] == round(sum(top["qty"][:6]))
 
     detail = client.get(f"/forecasts/{top['item_id']}").json()
     assert [f["qty"] for f in detail["forecast"]] == top["qty"]

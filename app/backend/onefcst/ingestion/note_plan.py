@@ -7,7 +7,7 @@ Lifecycle statuses: 1新規(発売前)/2発売中/3EOL(在庫あり)/4EOL(完全
 """
 from __future__ import annotations
 
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 
 from ..config import NOTE_STOCK_PLAN
 from .excel import read_xlsx_rows

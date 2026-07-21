@@ -1,9 +1,15 @@
-fastapi==0.121.0
+fastapi==0.139.2
+starlette==1.3.1
 uvicorn==0.38.0
 sqlalchemy==2.0.45
 openpyxl==3.1.5
 pyxlsb==1.0.10
 pydantic==2.12.5
+
+# Postgres driver — only needed when DATABASE_URL points at a real Postgres
+# instance (the DGX/production deployment); SQLite (local/WSL dev, the
+# default) needs no extra driver. Safe to always install.
+psycopg[binary]==3.2.3
 
 # NOT a pip package: ingestion/sap.py's live SAP source (SAP在庫抽出.accdb,
 # an Access DB) is read via the `mdb-export` CLI tool, system-installed:

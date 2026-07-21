@@ -61,19 +61,3 @@ def reproduce_chain(months: list, mom: list[float | None],
             else:
                 stats["override_cells"] += 1
     return stats
-
-
-def project_chain(seed: float, mom: list[float | None],
-                  adjustments: dict[int, float] | None = None) -> list[float]:
-    """Forward-project a NEW plan from a seed value using seasonal MoM,
-    with optional per-month adjustment factors overriding the default MoM.
-    This is what the live system uses going forward (chain reproduction above
-    is only for parity-checking against the historical file).
-    """
-    adjustments = adjustments or {}
-    out = [seed]
-    for i in range(1, len(mom)):
-        coef = adjustments.get(i, mom[i])
-        prev = out[-1]
-        out.append(prev * coef if (prev is not None and coef is not None) else None)
-    return out

@@ -72,7 +72,7 @@ from . import nas_sync
 from .db import get_session
 from .models import (Item, ForecastRun, Forecast, Adjustment, AccuracyScore,
                      PlannerSnapshot, CompatRule, AuditLog, Actual, WeeklyActual,
-                     Suggestion)
+                     Suggestion, OrderAction)
 
 
 def _snapshot(session) -> dict:
@@ -138,11 +138,19 @@ def _snapshot(session) -> dict:
         {"item_id": a.item_id, "week_start": a.week_start, "qty": a.qty, "source": a.source}
         for a in session.query(WeeklyActual)
     ]
+    order_actions = [
+        {"item_id": o.item_id, "status": o.status, "qty_ordered": o.qty_ordered,
+         "expected_arrival_date": o.expected_arrival_date, "note": o.note,
+         "ordered_by": o.ordered_by, "ordered_at": o.ordered_at,
+         "received_by": o.received_by, "received_at": o.received_at}
+        for o in session.query(OrderAction)
+    ]
     return {"items": items, "runs": runs, "forecasts": forecasts,
             "adjustments": adjustments, "scores": scores, "snapshots": snapshots,
             "compat_rules": compat_rules, "audit_log": audit_log, "actuals": actuals,
             "weekly_actuals": weekly_actuals, "eol_flags": eol_flags,
-            "discontinuation_suggestions": discontinuation_suggestions}
+            "discontinuation_suggestions": discontinuation_suggestions,
+            "order_actions": order_actions}
 
 
 def _restore(session, snap: dict) -> dict:
@@ -158,7 +166,7 @@ def _restore(session, snap: dict) -> dict:
     run_id_map = {}
     dropped = {"forecasts": 0, "adjustments": 0, "scores": 0, "snapshots": 0,
               "compat_rules": 0, "actuals": 0, "weekly_actuals": 0,
-              "discontinuation_suggestions": 0}
+              "discontinuation_suggestions": 0, "order_actions": 0}
     superseded = {"actuals": 0, "weekly_actuals": 0, "discontinuation_suggestions": 0}
 
     # Item.eol_flag/marked_no_reorder — restore onto the NEW row by
@@ -201,6 +209,16 @@ def _restore(session, snap: dict) -> dict:
                                factor=a["factor"], scope=a["scope"],
                                reason=a["reason"], author=a["author"],
                                created_at=a["created_at"]))
+
+    for o in snap["order_actions"]:
+        iid = item_id(o["item_id"])
+        if iid is None:
+            dropped["order_actions"] += 1
+            continue
+        session.add(OrderAction(item_id=iid, status=o["status"], qty_ordered=o["qty_ordered"],
+                                expected_arrival_date=o["expected_arrival_date"], note=o["note"],
+                                ordered_by=o["ordered_by"], ordered_at=o["ordered_at"],
+                                received_by=o["received_by"], received_at=o["received_at"]))
 
     for s in snap["scores"]:
         iid = item_id(s["item_id"])
@@ -358,6 +376,7 @@ def run() -> dict:
         "weekly_actuals": len(snap["weekly_actuals"]),
         "eol_flags": len(snap["eol_flags"]),
         "discontinuation_suggestions": len(snap["discontinuation_suggestions"]),
+        "order_actions": len(snap["order_actions"]),
         "dropped": dropped, "superseded": superseded,
     }
     return build_report
@@ -369,5 +388,6 @@ if __name__ == "__main__":
     print(f"[rebuild_preserving] carried over: {hp['adjustments']} adjustments, "
           f"{hp['compat_rules']} compat rules, {hp['audit_log']} audit-log entries, "
           f"{hp['runs']} forecast runs, {hp['scores']} accuracy scores, "
-          f"{hp['snapshots']} planner snapshots, {hp['actuals']} actual-sales rows "
+          f"{hp['snapshots']} planner snapshots, {hp['actuals']} actual-sales rows, "
+          f"{hp['order_actions']} order actions "
           f"(dropped: {hp['dropped']}, superseded by fresher ingest: {hp['superseded']})")

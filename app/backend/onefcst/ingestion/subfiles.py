@@ -11,11 +11,27 @@ series for the three-level plan diff. Also captures the current
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from .subfile_config import FILES, BLOCK_LABELS, BASE
 from .excel import col_letter, read_dict_rows, to_date, to_float
+
+MAX_COVERAGE_GAP_DAYS = 10   # a month's own daily columns must start within
+                              # this many days of day 1 AND end within this
+                              # many days of month-end, or the file's column
+                              # range doesn't actually cover the whole month —
+                              # same completeness guard verify/sales_reconciliation.py
+                              # already applies to SAP's rolling shipment window.
+                              # Found 2026-07-21: ONE_08_MB_社外秘.xlsb's own daily
+                              # range starts 2026-03-29, so summing "every column
+                              # in March" only summed 3 real days — a total ~10x
+                              # (31/3) lower than the real month, which then read
+                              # as a false master/one_row "disagreement" for 31
+                              # unrelated items in verify/reconciliation.py. Every
+                              # sub-file's rolling column window has a start and
+                              # end edge; whichever calendar month that edge falls
+                              # inside is at risk of the same silent undercount.
 
 
 def parse_subfile_series(cat: str, snapshot_date: date | None = None) -> dict:
@@ -66,6 +82,22 @@ def parse_subfile_series(cat: str, snapshot_date: date | None = None) -> dict:
     snap_col = next((c for c, d in sorted_dates if d >= snapshot_date),
                     sorted_dates[-1][0] if sorted_dates else None)
 
+    # a month only counts as fully covered if its earliest present column is
+    # near day 1 AND its latest present column is near month-end — otherwise
+    # the file's own column range clips into that month (see MAX_COVERAGE_
+    # GAP_DAYS docstring above) and summing "every column found" would
+    # silently produce a partial-month total instead of a real one.
+    incomplete_months: set[date] = set()
+    for month, cols in cols_by_month.items():
+        month_dates = [date_cols[c] for c in cols]
+        next_month = date(month.year + (month.month == 12), month.month % 12 + 1, 1)
+        month_end = next_month - timedelta(days=1)
+        if ((min(month_dates) - month).days > MAX_COVERAGE_GAP_DAYS
+                or (month_end - max(month_dates)).days > MAX_COVERAGE_GAP_DAYS):
+            incomplete_months.add(month)
+    if incomplete_months:
+        stats["excluded_incomplete_months"] = sorted(m.isoformat() for m in incomplete_months)
+
     series, stock = [], []
     i = 0
     while i + 3 < len(rows):
@@ -82,6 +114,8 @@ def parse_subfile_series(cat: str, snapshot_date: date | None = None) -> dict:
             continue
         stats["skus"] += 1
         for month, cols in cols_by_month.items():
+            if month in incomplete_months:
+                continue
             values = [v for c in cols if (v := to_float(r0.get(c))) is not None]
             if values:
                 series.append({"adana": sku, "month": month, "value": sum(values),

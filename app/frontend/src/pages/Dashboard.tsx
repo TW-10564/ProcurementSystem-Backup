@@ -183,7 +183,7 @@ export default function Dashboard() {
                     : "CPU/MB demand gaps by socket (HIGH and MEDIUM only)"}
                 </div>
               </div>
-              <Link to="/mismatch" className="btn">
+              <Link to="/app/mismatch" className="btn">
                 {ja ? "すべて表示" : "View all"}
               </Link>
             </div>
@@ -228,7 +228,7 @@ export default function Dashboard() {
                 <div className="eyebrow">{ja ? "監査ログ" : "Audit log"}</div>
                 <h3>{t("dash_activity_title")}</h3>
               </div>
-              <Link to="/notifications" className="btn">
+              <Link to="/app/notifications" className="btn">
                 {ja ? "すべて表示" : "View all"}
               </Link>
             </div>
