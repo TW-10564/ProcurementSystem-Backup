@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useLang } from "../i18n/LanguageContext";
 import type { TranslationKey } from "../i18n/translations";
 import {
@@ -9,6 +9,7 @@ import {
   DashboardIcon,
   DiscontinuationIcon,
   ForecastIcon,
+  LogoutIcon,
   MismatchIcon,
   NotificationsIcon,
 } from "./icons";
@@ -53,6 +54,7 @@ export default function Layout() {
   const { lang, setLang, t } = useLang();
   const [expanded, setExpanded] = useState(false);
   const asideRef = useRef<HTMLElement>(null);
+  const navigate = useNavigate();
 
   return (
     <div className="app-shell">
@@ -62,12 +64,18 @@ export default function Layout() {
             <img src="/twave-logo.png" alt={t("brand_name")} className="header-logo" />
           </Link>
         </div>
-        <div className="lang-toggle">
-          <button className={lang === "ja" ? "on" : ""} onClick={() => setLang("ja")}>
-            日本語
-          </button>
-          <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>
-            EN
+        <div className="header-right">
+          <div className="lang-toggle">
+            <button className={lang === "ja" ? "on" : ""} onClick={() => setLang("ja")}>
+              日本語
+            </button>
+            <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>
+              EN
+            </button>
+          </div>
+          <button className="logout-btn" onClick={() => navigate("/")}>
+            <LogoutIcon className="logout-icon" />
+            {t("logout")}
           </button>
         </div>
       </header>

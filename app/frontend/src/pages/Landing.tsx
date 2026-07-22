@@ -18,6 +18,7 @@ export default function Landing() {
 
       <div className="landing-body">
         <div className="landing-copy">
+          <div className="landing-eyebrow">{t("brand_sub")}</div>
           <h1>
             {t("landing_headline_1")}
             <span className="accent">{t("landing_headline_2")}</span>
@@ -33,6 +34,8 @@ export default function Landing() {
           <div className="landing-enter-note">{t("landing_enter_note")}</div>
         </div>
       </div>
+
+      <div className="landing-wave" aria-hidden="true" />
     </div>
   );
 }

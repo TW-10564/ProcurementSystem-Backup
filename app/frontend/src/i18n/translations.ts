@@ -4,8 +4,8 @@ export const translations = {
   brand_name: { ja: "調達予測ポータル", en: "Procurement Forecast Portal" },
   brand_sub: { ja: "需要予測・購買意思決定支援", en: "Demand forecasting & buying decision support" },
 
-  landing_headline_1: { ja: "需要予測を、", en: "Stay ahead of " },
-  landing_headline_2: { ja: "確信を持って。", en: "your demand." },
+  landing_headline_1: { ja: "根拠が見える予測で、", en: "Forecasts you can see through, " },
+  landing_headline_2: { ja: "調達判断に自信を。", en: "decisions you can trust." },
   landing_desc: {
     ja: "調達予測ポータル — CPU・MB・VGA・Caseの需要予測から発注提案、部材整合性チェックまで、購買判断を一元的に支援します。",
     en: "The Procurement Forecast Portal supports buying decisions end to end — from CPU/MB/VGA/Case demand forecasts to order suggestions and parts-compatibility checks.",
@@ -16,6 +16,8 @@ export const translations = {
     ja: "現在パイロット運用中のため、サインインは無効化されています。",
     en: "Sign-in is disabled during this pilot deployment.",
   },
+
+  logout: { ja: "ログアウト", en: "Log out" },
 
   nav_section_overview: { ja: "概要", en: "Overview" },
   nav_dashboard: { ja: "ダッシュボード", en: "Dashboard" },
