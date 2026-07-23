@@ -354,6 +354,15 @@ export const translations = {
     ja: "最小発注数量により{months}ヶ月分の在庫になります",
     en: "MOQ-driven — {months} months of cover",
   },
+  fc_orders_low_confidence_badge: { ja: "低信頼度", en: "Low confidence" },
+  fc_orders_low_confidence_tooltip_unverified: {
+    ja: "SAPでの物理在庫確認ができていません。ONE計画の予測残高のみに基づく数値のため、目視での確認を推奨します。",
+    en: "No SAP physical stock count available for this item — based only on ONE's projected balance. Please double-check manually before ordering.",
+  },
+  fc_orders_low_confidence_tooltip_clamped: {
+    ja: "ONE計画の予測残高がマイナスだったため0として扱っています（SAPでの物理確認なし）。実際の在庫数は不明です。目視での確認を推奨します。",
+    en: "ONE's projected balance went negative and was clamped to 0 (no SAP verification available). The real stock level is unknown — please double-check manually.",
+  },
   fc_orders_search_placeholder: { ja: "部材名で絞り込み...", en: "Filter by item name..." },
   fc_orders_showing: { ja: "{shown} / {total} 件を表示", en: "Showing {shown} of {total}" },
   fc_orders_th_status: { ja: "発注状況", en: "Order status" },

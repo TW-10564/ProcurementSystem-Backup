@@ -9,7 +9,8 @@ from datetime import date, datetime
 from .config import ONE_MASTER, NOTE_ONE_MASTER, planning_file
 from .db import init_db, get_session, engine
 from .models import Base, Snapshot, PlanValue, StockState, Actual, WeeklyActual, Item
-from .ingestion import one_master, notepc_forecast, planning4, planning1, subfiles, sap, sap_shipments
+from .ingestion import (one_master, notepc_forecast, planning4, planning1, subfiles, sap,
+                       sap_shipments, sap_stock_history, sap_zp21)
 from .ingestion.sap_shipment_overrides import resolve_shipment_override
 from .ingestion.excel import file_meta
 from .ingestion.subfile_config import FILES as SUBFILE_CFG, BASE as SUBFILE_BASE
@@ -106,8 +107,18 @@ def _ingest_sap_shipments(session, norm_index, agg_rows, weekly_rows=None) -> di
     """Resolves each aggregated shipment row and writes one Actual row per
     (item, month) — plus, when weekly_rows is given (name_a/name_b-aligned
     with agg_rows, one row per item, see sap_shipments.flatten_weekly), one
-    WeeklyActual row per (item, week) for the plan-vs-actual weekly
-    comparison view. Extracted from run() for direct unit testing
+    WeeklyActual row per (item, week).
+
+    WeeklyActual is no longer fed from here as of 2026-07-23 — build.run()
+    stopped passing weekly_rows (see the call site below). Per procurement's
+    own explanation, this source's timestamp (PC-shipment date) is the
+    wrong one for plan-vs-actual; ingestion/sap_zp21.py's 組込 ("build
+    incorporation") data, keyed to the timing purchasing actually tracks
+    demand by, replaced it there. The weekly_rows parameter and branch are
+    left in place (not deleted) since this function is still directly unit
+    tested against both behaviors — see tests/test_sap_shipments.py.
+
+    Extracted from run() for direct unit testing
     (build.run() itself needs live NAS access — see _resolve_planning1/
     _ingest_plan_rows above for the same pattern).
 
@@ -356,10 +367,50 @@ def run() -> dict:
     else:
         print("[SAP] no stock file found (glob miss) — skipped, non-blocking for M1")
 
-    # 6b. SAP shipments (実売実績) → Actual — found 2026-07-15: the Actual
-    # table (real per-item sales, read by FVA scoring and the Forecast
-    # page's recency sort) had ZERO rows in the live DB before this step;
-    # nothing had ever written to it. See ingestion/sap_shipments.py.
+    # 6b. SAP stock HISTORY backfill — manually-placed weekly raw ZM13
+    # exports (ingestion/sap_stock_history.py), distinct from the single
+    # "current" file/accdb read above. Added 2026-07-23 so the
+    # zero-stock discontinuation signal (verify/discontinuation.py,
+    # MIN_ZERO_STOCK_DAYS=60/MIN_ZERO_SNAPSHOTS=2) has enough accumulated
+    # history to ever fire, instead of waiting ~9 real weekly rebuild
+    # cycles. Writes one StockState row per (item, file's own as-of date)
+    # — same sap_qty field the "current" SAP path above writes, so
+    # forecast_views._prefer_sap_row/_stock_by_item treat these
+    # identically to a real weekly SAP refresh once they're in the DB.
+    # Preserved across future onefcst.rebuild_preserving runs the same
+    # way WeeklyActual is (see rebuild_preserving.py).
+    stock_history = sap_stock_history.parse_all_stock_history()
+    report["sap_stock_history"] = {"snapshots": len(stock_history), "matched": {}, "total_items": {}}
+    for entry in stock_history:
+        agg: dict = {}
+        matched = 0
+        for row in entry["rows"]:
+            item = resolve_any(session, norm_index, row["code"], prefer_source="商品コード")
+            if item is None and row["name_text"]:
+                item = resolve_any(session, norm_index, row["name_text"], prefer_source="ONE綽名")
+            if item is not None:
+                matched += 1
+            key = item.id if item is not None else ("unresolved", row["code"])
+            e = agg.setdefault(key, {"item": item, "raw_name": row["name_text"] or row["code"], "qty": 0.0})
+            e["qty"] += row["qty"]
+        for e in agg.values():
+            item = e["item"]
+            session.add(StockState(item_id=item.id if item else None, raw_name=e["raw_name"],
+                                   snapshot_date=entry["as_of_date"], sap_qty=e["qty"]))
+        report["sap_stock_history"]["matched"][str(entry["as_of_date"])] = matched
+        report["sap_stock_history"]["total_items"][str(entry["as_of_date"])] = len(agg)
+        print(f"[SAP stock history] {entry['path'].name}  as_of={entry['as_of_date']}  "
+              f"resolved_items={matched}/{len(agg)}")
+    if not stock_history:
+        print("[SAP stock history] no dated backfill files found — skipped, non-blocking")
+
+    # 6c. SAP shipments (実売実績) → Actual (MONTHLY only) — found
+    # 2026-07-15: the Actual table (real per-item sales, read by FVA
+    # scoring and the Forecast page's recency sort) had ZERO rows in the
+    # live DB before this step; nothing had ever written to it. See
+    # ingestion/sap_shipments.py. No longer feeds WeeklyActual as of
+    # 2026-07-23 — see sap_zp21 step below and _ingest_sap_shipments'
+    # docstring for why.
     #
     # Wrapped defensively (found live 2026-07-15, first real run against
     # unfiltered NAS data: an IntegrityError here — since fixed — crashed
@@ -381,8 +432,7 @@ def run() -> dict:
             shipments = sap_shipments.parse_sap_shipments()
             if shipments:
                 agg_rows = sap_shipments.aggregate_by_month(shipments)
-                weekly_rows = sap_shipments.flatten_weekly(shipments)
-                ship_stats = _ingest_sap_shipments(session, norm_index, agg_rows, weekly_rows)
+                ship_stats = _ingest_sap_shipments(session, norm_index, agg_rows)
                 report["sap_shipments"] = {
                     "path": str(shipments["path"]), "rows": len(agg_rows), **ship_stats,
                     "week_ending_dates": [d.isoformat() for d in shipments["week_ending_dates"]],
@@ -397,6 +447,38 @@ def run() -> dict:
         report["sap_shipments"] = {"path": None, "rows": 0, "resolved": 0, "unresolved": 0,
                                    "error": repr(e)}
         print(f"[SAP shipments] FAILED, skipping non-blocking: {e!r}")
+
+    # 6d. ZP21 組込 (build-incorporation) data → WeeklyActual — replaces
+    # SAP shipments as the plan-vs-actual weekly source as of 2026-07-23
+    # (see ingestion/sap_zp21.py docstring for why: procurement tracks
+    # demand by build-incorporation timing, not PC-shipment timing).
+    # Manually-placed weekly files (data/sap/組込/), same non-blocking
+    # tier as the SAP stock history backfill above.
+    zp21_weeks = sap_zp21.parse_all_zp21()
+    report["sap_zp21"] = {"weeks": len(zp21_weeks), "resolved": {}, "total_items": {}}
+    for week in zp21_weeks:
+        agg: dict = {}
+        matched = 0
+        for row in week["rows"]:
+            item = resolve_any(session, norm_index, row["code"], prefer_source="商品コード")
+            if item is None and row["name_text"]:
+                item = resolve_any(session, norm_index, row["name_text"], prefer_source="ONE綽名")
+            if item is not None:
+                matched += 1
+            key = item.id if item is not None else ("unresolved", row["code"])
+            e = agg.setdefault(key, {"item": item, "qty": 0.0})
+            e["qty"] += row["qty"]
+        for e in agg.values():
+            item = e["item"]
+            if item is not None:
+                session.add(WeeklyActual(item_id=item.id, week_start=week["week_start"],
+                                         qty=e["qty"], source="SAP"))
+        report["sap_zp21"]["resolved"][str(week["week_start"])] = matched
+        report["sap_zp21"]["total_items"][str(week["week_start"])] = len(agg)
+        print(f"[SAP ZP21] {week['path'].name}  week={week['week_start']}→{week['week_end']}  "
+              f"resolved_items={matched}/{len(agg)}")
+    if not zp21_weeks:
+        print("[SAP ZP21] no dated 組込 files found — skipped, non-blocking")
 
     session.commit()
 

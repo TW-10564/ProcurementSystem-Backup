@@ -73,6 +73,8 @@ def test_matches_real_actual_weeks_and_computes_variance(session):
     assert first_week["planned_qty"] is not None
     expected_variance = round((120.0 - first_week["planned_qty"]) / first_week["planned_qty"] * 100, 1)
     assert first_week["variance_pct"] == expected_variance
+    expected_variance_qty = round(120.0 - first_week["planned_qty"], 1)
+    assert first_week["variance_qty"] == expected_variance_qty
 
 
 def test_actual_week_offset_from_monday_still_matches_the_containing_forecast_week(session):
@@ -94,6 +96,28 @@ def test_actual_week_offset_from_monday_still_matches_the_containing_forecast_we
     assert first_week["actual_qty"] == 50.0
 
 
+def test_zero_planned_week_gets_variance_qty_but_not_variance_pct(session):
+    """variance_pct is guarded against a planned=0 week (would divide by
+    zero) and correctly returns None — but variance_qty (a plain
+    subtraction) has no such restriction and should still report the real
+    absolute gap, since "planned 0, actual 5" is a meaningful 5-unit miss
+    even though it has no sensible percentage."""
+    item = Item(canonical_name="X", kind="part")
+    session.add(item)
+    session.flush()
+    _seed_forecast(session, item, baseline=0.0)
+    session.add(WeeklyActual(item_id=item.id, week_start=date(2026, 6, 1),
+                             qty=5.0, source="SAP"))
+    session.commit()
+
+    result = plan_vs_actual(session, item.id)
+    first_week = next(w for w in result["weeks"] if w["week_start"] == "2026-06-01")
+    assert first_week["planned_qty"] == 0.0
+    assert first_week["actual_qty"] == 5.0
+    assert first_week["variance_pct"] is None
+    assert first_week["variance_qty"] == 5.0
+
+
 def test_weeks_with_no_actual_data_yet_have_null_actual_and_variance(session):
     item = Item(canonical_name="X", kind="part")
     session.add(item)
@@ -104,6 +128,7 @@ def test_weeks_with_no_actual_data_yet_have_null_actual_and_variance(session):
     result = plan_vs_actual(session, item.id)
     assert all(w["actual_qty"] is None for w in result["weeks"])
     assert all(w["variance_pct"] is None for w in result["weeks"])
+    assert all(w["variance_qty"] is None for w in result["weeks"])
 
 
 def test_reflects_an_existing_adjustment_not_the_raw_baseline(session):

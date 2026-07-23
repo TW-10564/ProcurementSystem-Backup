@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from onefcst.models import (Base, Item, ForecastRun, Forecast, Adjustment,
                             AccuracyScore, PlannerSnapshot, CompatRule, AuditLog, Actual,
-                            WeeklyActual)
+                            WeeklyActual, StockState)
 from onefcst.rebuild_preserving import _snapshot, _restore
 
 
@@ -73,8 +73,9 @@ def test_adjustment_and_compat_rule_and_audit_log_survive_a_rebuild(session):
     assert dropped == {"forecasts": 0, "adjustments": 0, "scores": 0,
                        "snapshots": 0, "compat_rules": 0, "actuals": 0,
                        "weekly_actuals": 0, "discontinuation_suggestions": 0,
-                       "order_actions": 0}
-    assert superseded == {"actuals": 0, "weekly_actuals": 0, "discontinuation_suggestions": 0}
+                       "order_actions": 0, "stock_states": 0}
+    assert superseded == {"actuals": 0, "weekly_actuals": 0, "discontinuation_suggestions": 0,
+                          "stock_states": 0}
 
     new_cpu = session.query(Item).filter_by(canonical_name="CPU_A").one()
     new_mb = session.query(Item).filter_by(canonical_name="MB_A").one()
@@ -293,3 +294,92 @@ def test_fresh_weekly_ingest_wins_over_preserved_row_for_the_same_key(session):
     rows = session.query(WeeklyActual).all()
     assert len(rows) == 1
     assert rows[0].qty == 15.0
+
+
+def test_stock_state_history_survives_a_rebuild(session):
+    """Backfilled/past-week StockState rows (ingestion/sap_stock_history.py)
+    must accumulate across rebuilds instead of being silently wiped —
+    the gap verify/discontinuation.py's own docstring already assumed was
+    closed before this fix actually existed."""
+    item = Item(canonical_name="CPU_A", kind="part")
+    session.add(item)
+    session.flush()
+    session.add(StockState(item_id=item.id, raw_name="CPU_A",
+                           snapshot_date=date(2026, 6, 1), sap_qty=100.0))
+    session.commit()
+
+    snap = _snapshot(session)
+    _simulate_rebuild(session, ["CPU_A"])
+    dropped, superseded = _restore(session, snap)
+
+    assert dropped["stock_states"] == 0
+    assert superseded["stock_states"] == 0
+    new_item = session.query(Item).filter_by(canonical_name="CPU_A").one()
+    row = session.query(StockState).one()
+    assert row.item_id == new_item.id
+    assert row.sap_qty == 100.0
+
+
+def test_stock_state_sap_and_one_rows_for_the_same_date_both_survive(session):
+    """The sap_qty row and the one_balance row for the same (item, date)
+    are two different "kinds" (see forecast_views._prefer_sap_row) and
+    must not collide with each other during restore."""
+    item = Item(canonical_name="CPU_A", kind="part")
+    session.add(item)
+    session.flush()
+    session.add(StockState(item_id=item.id, raw_name="CPU_A",
+                           snapshot_date=date(2026, 6, 1), sap_qty=100.0))
+    session.add(StockState(item_id=item.id, raw_name="CPU_A",
+                           snapshot_date=date(2026, 6, 1), one_balance=80.0))
+    session.commit()
+
+    snap = _snapshot(session)
+    _simulate_rebuild(session, ["CPU_A"])
+    dropped, superseded = _restore(session, snap)
+
+    assert dropped["stock_states"] == 0
+    assert superseded["stock_states"] == 0
+    rows = session.query(StockState).all()
+    assert len(rows) == 2
+    assert {r.sap_qty for r in rows} == {100.0, None}
+    assert {r.one_balance for r in rows} == {80.0, None}
+
+
+def test_fresh_stock_state_ingest_wins_over_preserved_row_for_the_same_key(session):
+    item = Item(canonical_name="CPU_A", kind="part")
+    session.add(item)
+    session.flush()
+    session.add(StockState(item_id=item.id, raw_name="CPU_A",
+                           snapshot_date=date(2026, 6, 1), sap_qty=100.0))
+    session.commit()
+
+    snap = _snapshot(session)
+    _simulate_rebuild(session, ["CPU_A"])
+    fresh_item = session.query(Item).filter_by(canonical_name="CPU_A").one()
+    session.add(StockState(item_id=fresh_item.id, raw_name="CPU_A",
+                           snapshot_date=date(2026, 6, 1), sap_qty=110.0))  # corrected re-read
+    session.commit()
+
+    dropped, superseded = _restore(session, snap)
+
+    assert dropped["stock_states"] == 0
+    assert superseded["stock_states"] == 1
+    rows = session.query(StockState).all()
+    assert len(rows) == 1
+    assert rows[0].sap_qty == 110.0
+
+
+def test_stock_state_for_a_removed_item_is_dropped_not_dangling(session):
+    gone = Item(canonical_name="DISCONTINUED", kind="part")
+    session.add(gone)
+    session.flush()
+    session.add(StockState(item_id=gone.id, raw_name="DISCONTINUED",
+                           snapshot_date=date(2026, 6, 1), sap_qty=5.0))
+    session.commit()
+
+    snap = _snapshot(session)
+    _simulate_rebuild(session, ["CPU_A"])  # DISCONTINUED not re-inserted
+    dropped, superseded = _restore(session, snap)
+
+    assert dropped["stock_states"] == 1
+    assert session.query(StockState).count() == 0

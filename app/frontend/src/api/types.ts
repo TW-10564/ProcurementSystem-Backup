@@ -195,6 +195,7 @@ export interface PlanVsActualWeek {
   month: string;
   planned_qty: number | null;
   actual_qty: number | null;
+  variance_qty: number | null;
   variance_pct: number | null;
   has_adjustment: boolean;
   is_history: boolean;

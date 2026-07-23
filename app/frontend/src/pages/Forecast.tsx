@@ -911,6 +911,18 @@ export default function Forecast() {
                                       {t("fc_orders_negative_badge")}
                                     </span>
                                   )}
+                                  {r.stock_confidence !== "sap_verified" && (
+                                    <span
+                                      style={{ marginLeft: 6, fontSize: "0.68rem", fontWeight: 700, color: "var(--amber)", whiteSpace: "nowrap" }}
+                                      title={t(
+                                        r.stock_confidence === "one_only_negative_clamped"
+                                          ? "fc_orders_low_confidence_tooltip_clamped"
+                                          : "fc_orders_low_confidence_tooltip_unverified",
+                                      )}
+                                    >
+                                      ⚠ {t("fc_orders_low_confidence_badge")}
+                                    </span>
+                                  )}
                                 </td>
                                 <td className="num mono dim">{fmtQty(r.safety_stock)}</td>
                                 <td className="num mono" style={{ fontWeight: 700, color: "var(--amber)" }}>
@@ -1257,11 +1269,20 @@ export default function Forecast() {
                                 <td
                                   className="num mono"
                                   style={{
-                                    color: w.variance_pct === null ? undefined
-                                          : w.variance_pct < 0 ? "var(--red)" : "var(--green)",
+                                    color: w.variance_qty === null ? undefined
+                                          : w.variance_qty < 0 ? "var(--red)" : "var(--green)",
                                   }}
                                 >
-                                  {w.variance_pct !== null ? `${w.variance_pct > 0 ? "+" : ""}${w.variance_pct}%` : "—"}
+                                  {w.variance_qty !== null ? (
+                                    <>
+                                      {w.variance_qty > 0 ? "+" : ""}{fmtQty(w.variance_qty)}
+                                      {w.variance_pct !== null && (
+                                        <span className="dim" style={{ marginLeft: 4, fontSize: "0.85em" }}>
+                                          ({w.variance_pct > 0 ? "+" : ""}{w.variance_pct}%)
+                                        </span>
+                                      )}
+                                    </>
+                                  ) : "—"}
                                 </td>
                                 <td>
                                   {isFirstOfMonth && !w.is_history && w.planned_qty !== null && (

@@ -720,6 +720,16 @@ def plan_vs_actual(session, item_id: int, history_months: int = 1) -> dict | Non
     for wk in all_weeks:
         planned = plan_by_week.get(wk)
         actual = actual_by_week.get(wk)
+        # variance_qty (actual - planned, real units) alongside variance_pct
+        # — added 2026-07-23 because % alone is unstable at low volume (a
+        # planned=2/actual=4 week reads as "+100%", the same as a
+        # planned=200/actual=400 week, even though one is a trivial miss
+        # and the other is a large one). Same reason engine/baseline.py
+        # scores accuracy with volume-weighted WAPE rather than raw % —
+        # this view didn't have that protection until now; variance_qty
+        # gives the reader the absolute-unit context % can't.
+        variance_qty = (round(actual - planned, 1)
+                        if planned is not None and actual is not None else None)
         variance_pct = (round((actual - planned) / planned * 100, 1)
                         if planned and actual is not None else None)
         month = week_month.get(wk, wk.replace(day=1))
@@ -727,7 +737,8 @@ def plan_vs_actual(session, item_id: int, history_months: int = 1) -> dict | Non
         month_idx = month_dates.index(month) if (not is_history and month in month_dates) else None
         weeks_out.append({
             "week_start": wk.isoformat(), "month": month.isoformat(),
-            "planned_qty": planned, "actual_qty": actual, "variance_pct": variance_pct,
+            "planned_qty": planned, "actual_qty": actual,
+            "variance_qty": variance_qty, "variance_pct": variance_pct,
             "is_history": is_history,
             "has_adjustment": bool(adj_detail.get(month_idx)) if month_idx is not None else False,
         })

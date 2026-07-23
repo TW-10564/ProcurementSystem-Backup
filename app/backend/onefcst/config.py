@@ -116,6 +116,15 @@ LLM_TIMEOUT = float(os.environ.get("ONEFCST_LLM_TIMEOUT", "120"))
 # the same value in every request's X-API-Key header.
 API_KEY = os.environ.get("ONEFCST_API_KEY", "")
 
+# --- rate limiting ----------------------------------------------------------
+# Basic per-client request cap (see api/rate_limit.py) — added 2026-07-23 as
+# the cheapest defense against a leaked/guessed ONEFCST_API_KEY being
+# hammered or brute-forced. Fixed 60-second window, in-memory (this app
+# runs as a single uvicorn process — see NullPool note in db.py — so no
+# shared-store coordination is needed). 0 disables it (the dev default,
+# same "don't block local work" stance as API_KEY above).
+RATE_LIMIT_PER_MINUTE = int(os.environ.get("ONEFCST_RATE_LIMIT_PER_MINUTE", "0"))
+
 # --- CORS -----------------------------------------------------------------
 # Comma-separated allowed origins for the SPA (see api/main.py's
 # CORSMiddleware). Defaults to localhost-only dev origins — FIX_PLAN item

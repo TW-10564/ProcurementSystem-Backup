@@ -130,7 +130,13 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── two-column cockpit ────────────────────────────────────── */}
+      {/* ── two-column cockpit: pair the two SHORT list cards together
+          (Quick actions, Needs attention) so grid-13's align-items:start
+          doesn't leave a height-mismatch gap under either one. The two
+          taller/wider sections (Audit log, Accuracy validation — the
+          latter has a 5-column table that needs real width, not a
+          squeezed narrow column) get their own full-width rows below,
+          same as before this redesign attempt. ───────────────────── */}
       <div className="grid-13" style={{ marginTop: 18 }}>
         {/* LEFT — quick actions */}
         <div className="card">
@@ -164,95 +170,95 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* RIGHT — needs attention + activity */}
-        <div style={{ display: "grid", gap: 18 }}>
-          <div className="card">
-            <div className="hd">
-              <div>
-                <div className="eyebrow">
-                  {mismatch
-                    ? ja
-                      ? `対象月 ${mismatch.month}`
-                      : `Target month ${mismatch.month}`
-                    : "—"}
-                </div>
-                <h3>{ja ? "要対応" : "Needs attention"}</h3>
-                <div className="desc">
-                  {ja
-                    ? "CPU/MB ソケット別の需給ギャップ（HIGH・MEDIUM のみ）"
-                    : "CPU/MB demand gaps by socket (HIGH and MEDIUM only)"}
-                </div>
+        {/* RIGHT — needs attention */}
+        <div className="card">
+          <div className="hd">
+            <div>
+              <div className="eyebrow">
+                {mismatch
+                  ? ja
+                    ? `対象月 ${mismatch.month}`
+                    : `Target month ${mismatch.month}`
+                  : "—"}
               </div>
-              <Link to="/app/mismatch" className="btn">
-                {ja ? "すべて表示" : "View all"}
-              </Link>
+              <h3>{ja ? "要対応" : "Needs attention"}</h3>
+              <div className="desc">
+                {ja
+                  ? "CPU/MB ソケット別の需給ギャップ（HIGH・MEDIUM のみ）"
+                  : "CPU/MB demand gaps by socket (HIGH and MEDIUM only)"}
+              </div>
             </div>
-            {mismatch ? (
-              attention.length ? (
-                <div>
-                  {attention.map((g) => (
-                    <div className="list-row" key={g.socket}>
-                      <div className={`icon-tile ${g.severity === "HIGH" ? "red" : "amber"}`}>
-                        ⚖️
-                      </div>
-                      <div className="grow">
-                        <div className="ttl mono">{g.socket}</div>
-                        <div className="meta">
-                          {ja
-                            ? `CPU ${g.cpu_demand.toLocaleString()} / MB ${g.mb_demand.toLocaleString()} — ギャップ ${g.gap.toLocaleString()}`
-                            : `CPU ${g.cpu_demand.toLocaleString()} / MB ${g.mb_demand.toLocaleString()} — gap ${g.gap.toLocaleString()}`}
-                          {g.pct != null && (
-                            <span className="mono">{` (${g.pct}%)`}</span>
-                          )}
-                        </div>
-                      </div>
-                      <span className={`pill ${g.severity === "HIGH" ? "p-high" : "p-medium"}`}>
-                        {g.severity}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty">
-                  {ja ? "対応が必要なミスマッチはありません" : "No mismatches need attention"}
-                </div>
-              )
-            ) : (
-              <div className="empty">{t("common_loading")}</div>
-            )}
+            <Link to="/app/mismatch" className="btn">
+              {ja ? "すべて表示" : "View all"}
+            </Link>
           </div>
-
-          <div className="card">
-            <div className="hd">
+          {mismatch ? (
+            attention.length ? (
               <div>
-                <div className="eyebrow">{ja ? "監査ログ" : "Audit log"}</div>
-                <h3>{t("dash_activity_title")}</h3>
-              </div>
-              <Link to="/app/notifications" className="btn">
-                {ja ? "すべて表示" : "View all"}
-              </Link>
-            </div>
-            {activity.length ? (
-              <ul className="timeline">
-                {activity.map((a) => (
-                  <li key={a.id}>
-                    <div className="when mono">
-                      {new Date(a.at).toLocaleString(ja ? "ja-JP" : "en-US")}
-                      {" · "}
-                      {a.who ?? "system"}
+                {attention.map((g) => (
+                  <div className="list-row" key={g.socket}>
+                    <div className={`icon-tile ${g.severity === "HIGH" ? "red" : "amber"}`}>
+                      ⚖️
                     </div>
-                    <div className="what">{a.what}</div>
-                  </li>
+                    <div className="grow">
+                      <div className="ttl mono">{g.socket}</div>
+                      <div className="meta">
+                        {ja
+                          ? `CPU ${g.cpu_demand.toLocaleString()} / MB ${g.mb_demand.toLocaleString()} — ギャップ ${g.gap.toLocaleString()}`
+                          : `CPU ${g.cpu_demand.toLocaleString()} / MB ${g.mb_demand.toLocaleString()} — gap ${g.gap.toLocaleString()}`}
+                        {g.pct != null && (
+                          <span className="mono">{` (${g.pct}%)`}</span>
+                        )}
+                      </div>
+                    </div>
+                    <span className={`pill ${g.severity === "HIGH" ? "p-high" : "p-medium"}`}>
+                      {g.severity}
+                    </span>
+                  </div>
                 ))}
-              </ul>
+              </div>
             ) : (
-              <div className="empty">{t("common_none_recorded")}</div>
-            )}
-          </div>
+              <div className="empty">
+                {ja ? "対応が必要なミスマッチはありません" : "No mismatches need attention"}
+              </div>
+            )
+          ) : (
+            <div className="empty">{t("common_loading")}</div>
+          )}
         </div>
       </div>
 
-      {/* ── backtest evidence ─────────────────────────────────────── */}
+      {/* ── audit log (full width — a 6-row timeline reads better with
+          room, not squeezed into a half-width column) ──────────────── */}
+      <div className="card" style={{ marginTop: 18 }}>
+        <div className="hd">
+          <div>
+            <div className="eyebrow">{ja ? "監査ログ" : "Audit log"}</div>
+            <h3>{t("dash_activity_title")}</h3>
+          </div>
+          <Link to="/app/notifications" className="btn">
+            {ja ? "すべて表示" : "View all"}
+          </Link>
+        </div>
+        {activity.length ? (
+          <ul className="timeline">
+            {activity.map((a) => (
+              <li key={a.id}>
+                <div className="when mono">
+                  {new Date(a.at).toLocaleString(ja ? "ja-JP" : "en-US")}
+                  {" · "}
+                  {a.who ?? "system"}
+                </div>
+                <div className="what">{a.what}</div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="empty">{t("common_none_recorded")}</div>
+        )}
+      </div>
+
+      {/* ── backtest evidence (full width — 5 columns need real room) ── */}
       <div className="card" style={{ marginTop: 18 }}>
         <div className="hd">
           <div>

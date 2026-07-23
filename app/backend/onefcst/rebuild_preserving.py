@@ -41,6 +41,23 @@ ForecastRun.created_at against Adjustment.created_at. Shifting those
 timestamps would silently repoint old adjustments at the wrong historical
 run.
 
+StockState needs the same supersede-by-fresh-ingest rule as Actual/
+WeeklyActual, added 2026-07-23 alongside ingestion/sap_stock_history.py
+(manually-placed weekly ZM13 backfill files — see that module). Before
+this, build.run() only ever wrote ONE current-day StockState row per
+item per rebuild (whatever the live accdb/xlsx source had "today"), so
+every rebuild silently discarded all prior weeks' physical-stock history
+even though verify/discontinuation.py's zero-stock check already assumed
+history would accumulate here "without wiping it" — that assumption did
+not actually hold until this fix. The two StockState "kinds" per item
+(one_balance from ONE's own simulated projection vs sap_qty from a real
+SAP count — see forecast_views._prefer_sap_row) are preserved/deduped
+separately by (item_id, snapshot_date, kind), since a fresh rebuild only
+ever re-writes both kinds for the CURRENT day, never past dates — so any
+preserved row from a past date is always additive, and only a same-day
+collision (this rebuild + a prior rebuild run same-day) needs the
+supersede-not-duplicate treatment.
+
 Item.eol_flag/marked_no_reorder and discontinuation Suggestion rows (added
 2026-07-17, same day advisory/discontinuation_review.py's confirm/reject
 queue was built) need BOTH a value restore and a de-dup step, not just a
@@ -72,7 +89,7 @@ from . import nas_sync
 from .db import get_session
 from .models import (Item, ForecastRun, Forecast, Adjustment, AccuracyScore,
                      PlannerSnapshot, CompatRule, AuditLog, Actual, WeeklyActual,
-                     Suggestion, OrderAction)
+                     Suggestion, OrderAction, StockState)
 
 
 def _snapshot(session) -> dict:
@@ -145,12 +162,18 @@ def _snapshot(session) -> dict:
          "received_by": o.received_by, "received_at": o.received_at}
         for o in session.query(OrderAction)
     ]
+    stock_states = [
+        {"item_id": s.item_id, "raw_name": s.raw_name, "snapshot_date": s.snapshot_date,
+         "one_balance": s.one_balance, "one_stock_days": s.one_stock_days,
+         "safety_days": s.safety_days, "sap_qty": s.sap_qty}
+        for s in session.query(StockState)
+    ]
     return {"items": items, "runs": runs, "forecasts": forecasts,
             "adjustments": adjustments, "scores": scores, "snapshots": snapshots,
             "compat_rules": compat_rules, "audit_log": audit_log, "actuals": actuals,
             "weekly_actuals": weekly_actuals, "eol_flags": eol_flags,
             "discontinuation_suggestions": discontinuation_suggestions,
-            "order_actions": order_actions}
+            "order_actions": order_actions, "stock_states": stock_states}
 
 
 def _restore(session, snap: dict) -> dict:
@@ -166,8 +189,9 @@ def _restore(session, snap: dict) -> dict:
     run_id_map = {}
     dropped = {"forecasts": 0, "adjustments": 0, "scores": 0, "snapshots": 0,
               "compat_rules": 0, "actuals": 0, "weekly_actuals": 0,
-              "discontinuation_suggestions": 0, "order_actions": 0}
-    superseded = {"actuals": 0, "weekly_actuals": 0, "discontinuation_suggestions": 0}
+              "discontinuation_suggestions": 0, "order_actions": 0, "stock_states": 0}
+    superseded = {"actuals": 0, "weekly_actuals": 0, "discontinuation_suggestions": 0,
+                 "stock_states": 0}
 
     # Item.eol_flag/marked_no_reorder — restore onto the NEW row by
     # canonical_name BEFORE anything else touches Suggestion, so a
@@ -334,6 +358,35 @@ def _restore(session, snap: dict) -> dict:
                                reviewed_by=old_s["reviewed_by"], reviewed_at=old_s["reviewed_at"],
                                created_at=old_s["created_at"]))
 
+    # StockState: same supersede-by-fresh-ingest rule as Actual/WeeklyActual
+    # above (see module docstring). "kind" distinguishes ONE's simulated
+    # projection from a real SAP count, since both can exist for the same
+    # (item, date) — see forecast_views._prefer_sap_row.
+    def _kind(sap_qty, one_balance):
+        if sap_qty is not None:
+            return "sap"
+        if one_balance is not None:
+            return "one"
+        return "unknown"
+
+    existing_stock_keys = {(s.item_id, s.snapshot_date, _kind(s.sap_qty, s.one_balance))
+                           for s in session.query(StockState)}
+    seen_stock_keys = set(existing_stock_keys)
+    for s in snap["stock_states"]:
+        iid = item_id(s["item_id"])
+        if iid is None:
+            dropped["stock_states"] += 1
+            continue
+        key = (iid, s["snapshot_date"], _kind(s["sap_qty"], s["one_balance"]))
+        if key in seen_stock_keys:
+            superseded["stock_states"] += 1
+            continue
+        seen_stock_keys.add(key)
+        session.add(StockState(item_id=iid, raw_name=s["raw_name"],
+                               snapshot_date=s["snapshot_date"], one_balance=s["one_balance"],
+                               one_stock_days=s["one_stock_days"], safety_days=s["safety_days"],
+                               sap_qty=s["sap_qty"]))
+
     session.commit()
     return dropped, superseded
 
@@ -377,6 +430,7 @@ def run() -> dict:
         "eol_flags": len(snap["eol_flags"]),
         "discontinuation_suggestions": len(snap["discontinuation_suggestions"]),
         "order_actions": len(snap["order_actions"]),
+        "stock_states": len(snap["stock_states"]),
         "dropped": dropped, "superseded": superseded,
     }
     return build_report
@@ -389,5 +443,5 @@ if __name__ == "__main__":
           f"{hp['compat_rules']} compat rules, {hp['audit_log']} audit-log entries, "
           f"{hp['runs']} forecast runs, {hp['scores']} accuracy scores, "
           f"{hp['snapshots']} planner snapshots, {hp['actuals']} actual-sales rows, "
-          f"{hp['order_actions']} order actions "
+          f"{hp['order_actions']} order actions, {hp['stock_states']} stock-state rows "
           f"(dropped: {hp['dropped']}, superseded by fresher ingest: {hp['superseded']})")

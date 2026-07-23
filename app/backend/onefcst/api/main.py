@@ -27,6 +27,7 @@ from ..advisory import notifications as notif_svc
 from ..advisory import discontinuation_review as discontinuation_svc
 from ..advisory import order_actions as order_svc
 from .auth import require_api_key
+from .rate_limit import RateLimitMiddleware
 from .schemas import (CompatRuleOut, ConfirmRequest, RejectRequest,
                       EditRuleRequest, AdjustmentIn, AdjustmentOut,
                       NotificationOut, DiscontinuationSuggestionOut,
@@ -45,6 +46,11 @@ app = FastAPI(title="onefcst — Forecasting & Procurement Decision Support",
              description="Phase-1 advisory API. Read-only against all NAS "
              "sources; writes only to this app's own database.",
              lifespan=lifespan, dependencies=[Depends(require_api_key)])
+
+# Rate limiting added BEFORE CORS below — Starlette applies middleware in
+# reverse of add order (last added = outermost), and CORS should stay
+# outermost so its headers still get attached even on a 429 response.
+app.add_middleware(RateLimitMiddleware)
 
 # CORS: the SPA (Vite dev server) runs on a different origin. Defaults to
 # localhost-only (see config.CORS_ORIGINS) — set ONEFCST_CORS_ORIGINS to the
