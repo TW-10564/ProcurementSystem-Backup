@@ -25,6 +25,7 @@ import bisect
 import json
 from datetime import date, timedelta
 
+from . import config
 from .models import (AccuracyScore, Actual, Adjustment, Forecast, ForecastRun,
                     Item, PlanValue, Snapshot, StockState, WeeklyActual)
 from .engine.stock_projection import suggest_order
@@ -292,7 +293,8 @@ def _suggestion(item: Item, stock: StockState | None, demand: list[float]) -> di
         return None
     s = suggest_order(current_balance=balance, monthly_demand=demand,
                       moq=item.moq, lead_time_days=effective_lead_time(item),
-                      min_stock_days=item.min_stock_days)
+                      min_stock_days=item.min_stock_days,
+                      moq_excessive_months=config.MOQ_EXCESSIVE_MONTHS)
     s["current_balance"] = balance
     s["stock_confidence"] = confidence
     return s

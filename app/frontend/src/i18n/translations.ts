@@ -280,6 +280,19 @@ export const translations = {
     ja: "ONE・SAPの最新データをNASから取り込みます。完了後は「予測を再計算」でこのデータを反映してください。",
     en: "Re-ingests the latest ONE/SAP data from the NAS. Click Recalculate afterward to reflect it in the forecast.",
   },
+  fc_export_scope_hint: {
+    ja: "Excel出力の対象範囲：全部材／企画部門の4部材／購買部門の部材",
+    en: "Excel export scope: all parts / planning's 4 categories / purchasing's parts",
+  },
+  fc_export_scope_all: { ja: "全部材", en: "All parts" },
+  fc_export_scope_tier1: {
+    ja: "企画4部材（CPU・VGA・MB・ケース）",
+    en: "Planning: 4 categories (CPU/VGA/MB/Case)",
+  },
+  fc_export_scope_tier2: {
+    ja: "購買部材（企画4部材以外）",
+    en: "Purchasing: all other parts",
+  },
   fc_rebuild_done: {
     ja: "NASからの再取込みが完了しました。「予測を再計算」を押して反映してください。",
     en: "Rebuild from NAS complete. Click Recalculate forecast to apply it.",

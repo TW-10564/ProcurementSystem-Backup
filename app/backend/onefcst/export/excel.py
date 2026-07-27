@@ -142,16 +142,31 @@ def export_audit_log(limit: int = 500) -> Path:
     return out
 
 
-def export_forecasts() -> Path:
+# Ownership-tier labels for the forecast export (Item.tier: 1 = the four
+# categories 経営企画部 plans directly, 2 = everything purchasing derives).
+# Keep in sync with config.TIER1_CATEGORIES.
+_TIER_SCOPE = {
+    None: ("全部材", "全部材（企画4部材＋購買部材）"),
+    1: ("企画4部材", "企画部門の4部材（CPU・グラフィックカード・マザーボード・PCケース）"),
+    2: ("購買部材", "購買部門の部材（企画4部材以外すべて）"),
+}
+
+
+def export_forecasts(tier: int | None = None) -> Path:
     """需要予測一覧 — every SKU's monthly baseline for the latest run, plus
-    stock, method, hold-out accuracy, and the order suggestion if any."""
+    stock, method, hold-out accuracy, and the order suggestion if any.
+
+    tier: None = all items, 1 = planning-owned CPU/VGA/MB/Case only,
+    2 = purchasing-owned everything else (same split as Item.tier)."""
     from .. import forecast_views
     session = get_session()
-    data = forecast_views.list_forecasts(session, limit=10000)
+    data = forecast_views.list_forecasts(session, tier=tier, limit=10000)
     session.close()
+    short, scope_label = _TIER_SCOPE[tier]
     wb, ws = _new_wb("需要予測")
     run = data.get("run") or {}
-    ws.append([f"需要予測（部品別・月別数量） — 実行: {run.get('created_at', '—')} "
+    ws.append([f"需要予測（部品別・月別数量） — 対象: {scope_label} — "
+               f"実行: {run.get('created_at', '—')} "
                f"/ 手法: {run.get('method_version', '—')}"])
     ws.append([f"出力日時: {datetime.now():%Y-%m-%d %H:%M} — "
                "検証WAPEは各SKUの直近6か月ホールドアウトによる（低いほど良い）"])
@@ -166,6 +181,6 @@ def export_forecasts() -> Path:
                    order.get("qty"), (order.get("order_by") or "")[:7]]
                   + [q for q in r["qty"]])
     _autosize(ws, (22, 14, 10, 12, 10, 12, 12, 12))
-    out = EXPORT_DIR / f"需要予測_{date.today():%Y%m%d}.xlsx"
+    out = EXPORT_DIR / f"需要予測_{short}_{date.today():%Y%m%d}.xlsx"
     wb.save(out)
     return out

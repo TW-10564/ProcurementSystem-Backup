@@ -26,16 +26,29 @@ def test_suggest_order_average_matches_explicit_zero_substitution():
 
 
 def test_moq_rounds_suggested_qty_up_to_a_multiple():
-    """moq=25 on a shortfall that isn't already a multiple of 25 must round
-    UP (never down — an order short of the real need defeats the point)."""
+    """moq=30 on a shortfall that isn't already a multiple of 30 must round
+    UP (never down — an order short of the real need defeats the point).
+    These inputs give a shortfall of exactly 100 — deliberately NOT a
+    multiple of the moq, so moq_applied must come back True. (Was moq=25,
+    which divides 100 evenly, so the test contradicted its own docstring
+    and failed against correct production math — fixed 2026-07-24.)"""
     no_moq = suggest_order(current_balance=100.0, monthly_demand=[100.0] * 3,
                            moq=None, lead_time_days=0, min_stock_days=0)
     with_moq = suggest_order(current_balance=100.0, monthly_demand=[100.0] * 3,
-                             moq=25, lead_time_days=0, min_stock_days=0)
+                             moq=30, lead_time_days=0, min_stock_days=0)
     assert with_moq["action"] == "suggest_order"
     assert with_moq["moq_applied"] is True
-    assert with_moq["suggested_qty"] % 25 == 0
+    assert with_moq["suggested_qty"] % 30 == 0
     assert with_moq["suggested_qty"] >= no_moq["suggested_qty"]
+
+
+def test_moq_not_flagged_when_shortfall_already_a_multiple():
+    """shortfall=100 with moq=25 needs no rounding — moq_applied stays False."""
+    r = suggest_order(current_balance=100.0, monthly_demand=[100.0] * 3,
+                      moq=25, lead_time_days=0, min_stock_days=0)
+    assert r["action"] == "suggest_order"
+    assert r["moq_applied"] is False
+    assert r["suggested_qty"] == 100.0
 
 
 def test_lead_time_shifts_order_by_month_earlier_than_breach():

@@ -31,12 +31,24 @@ import base64
 import subprocess
 from pathlib import Path
 
-from .config import ONE_DIR
+from .config import (NAS_ZM13_CACHE, NAS_ZM13_UNC, NAS_ZP21_CACHE,
+                     NAS_ZP21_UNC, ONE_DIR)
 
 # The NAS root, as seen from the Windows side — Z:\ itself already IS the
 # ...\ONE folder (confirmed 2026-07-17: ONE計画.xlsm sits directly at
 # Z:\ONE計画.xlsm, not in a subfolder), matching ONE_DIR's own file layout.
 NAS_SOURCE_WIN = "Z:\\"
+
+# 内田さん's weekly SAP drop folders (agreed 2026-07-27) — addressed by UNC
+# directly, NOT via Z:, because they sit under 購買本部\【通常業務】\ONE on
+# the share. Each is mirrored into its SAP_DIR cache subfolder; ingestion's
+# content-based discovery (sap_stock_history / sap_zp21 rglob SAP_DIR) picks
+# the files up from there, and both parsers de-dupe by date/week, so overlap
+# with older manually-placed copies is harmless.
+SAP_SYNC_SOURCES = [
+    ("zm13", NAS_ZM13_UNC, NAS_ZM13_CACHE),
+    ("zp21", NAS_ZP21_UNC, NAS_ZP21_CACHE),
+]
 
 
 def _to_windows_path(p: Path) -> str:
@@ -57,6 +69,13 @@ def refresh_from_nas(timeout_seconds: int = 180) -> dict:
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         return {"status": "skipped", "reason": f"wslpath unavailable: {e!r}"}
 
+    sap_dests = {}
+    for tag, _unc, cache in SAP_SYNC_SOURCES:
+        try:
+            sap_dests[tag] = _to_windows_path(cache)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
     # /XO: only copy files newer than what's already at the destination —
     # cheap on repeat runs, and never deletes local files Z: doesn't have
     # (a stale-but-present file beats a hole in the required set).
@@ -68,6 +87,16 @@ def refresh_from_nas(timeout_seconds: int = 180) -> dict:
         f'$after = (Get-ChildItem $dest -File | Measure-Object).Count\n'
         f'Write-Output "FILES_AFTER=$after"\n'
     )
+    for tag, unc, _cache in SAP_SYNC_SOURCES:
+        dw = sap_dests.get(tag)
+        if dw is None:
+            continue
+        ps_script += (
+            f'$d = "{dw}"\n'
+            f'New-Item -ItemType Directory -Force -Path $d | Out-Null\n'
+            f'robocopy "{unc}" $d /XO /R:1 /W:1 /NDL /NJH | Out-Null\n'
+            f'Write-Output "{tag.upper()}_AFTER=$((Get-ChildItem $d -File | Measure-Object).Count)"\n'
+        )
     encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
 
     try:
@@ -85,14 +114,25 @@ def refresh_from_nas(timeout_seconds: int = 180) -> dict:
                "returncode": result.returncode}
 
     files_after = None
+    sap_counts: dict[str, int] = {}
     for line in result.stdout.splitlines():
+        line = line.strip()
         if line.startswith("FILES_AFTER="):
             try:
                 files_after = int(line.split("=", 1)[1])
             except ValueError:
                 pass
+        else:
+            for tag, _unc, _cache in SAP_SYNC_SOURCES:
+                prefix = f"{tag.upper()}_AFTER="
+                if line.startswith(prefix):
+                    try:
+                        sap_counts[tag] = int(line.split("=", 1)[1])
+                    except ValueError:
+                        pass
 
-    return {"status": "ok", "one_dir": str(ONE_DIR), "files_in_cache": files_after}
+    return {"status": "ok", "one_dir": str(ONE_DIR), "files_in_cache": files_after,
+            "sap_folders": sap_counts}
 
 
 if __name__ == "__main__":

@@ -26,5 +26,8 @@ async def require_api_key(request: Request, x_api_key: str | None = Header(defau
         return
     if request.url.path == "/health":
         return
-    if x_api_key is None or not hmac.compare_digest(x_api_key, API_KEY):
+    # compare as bytes: compare_digest(str, str) raises TypeError (→ 500,
+    # not 401) if either side contains non-ASCII characters
+    if x_api_key is None or not hmac.compare_digest(
+            x_api_key.encode(), API_KEY.encode()):
         raise HTTPException(401, "missing or invalid X-API-Key")

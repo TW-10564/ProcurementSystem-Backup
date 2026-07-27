@@ -55,8 +55,12 @@ app.add_middleware(RateLimitMiddleware)
 # CORS: the SPA (Vite dev server) runs on a different origin. Defaults to
 # localhost-only (see config.CORS_ORIGINS) — set ONEFCST_CORS_ORIGINS to the
 # deployed dashboard's real origin(s) before hosting this anywhere else.
+# expose_headers: without it the browser hides Content-Disposition from JS on
+# cross-origin responses, so every /export/* download silently fell back to
+# its generic fallback name ("forecasts.xlsx") instead of the real Japanese
+# filename the backend sets — found 2026-07-27.
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"],
-                   allow_headers=["*"])
+                   allow_headers=["*"], expose_headers=["Content-Disposition"])
 
 
 def db():
@@ -545,9 +549,13 @@ def export_backtest_xlsx():
 
 
 @app.get("/export/forecasts")
-def export_forecasts_xlsx():
+def export_forecasts_xlsx(tier: int | None = None):
+    # tier: None = all items, 1 = planning's four categories (CPU/VGA/MB/Case),
+    # 2 = everything purchasing derives — same split as Item.tier / GET /forecasts.
+    if tier not in (None, 1, 2):
+        raise HTTPException(status_code=422, detail="tier must be 1 or 2 (omit for all)")
     from ..export.excel import export_forecasts
-    path = export_forecasts()
+    path = export_forecasts(tier=tier)
     return FileResponse(path, filename=path.name, media_type=XLSX_MEDIA)
 
 
@@ -556,3 +564,42 @@ def export_audit_log_xlsx():
     from ..export.excel import export_audit_log
     path = export_audit_log()
     return FileResponse(path, filename=path.name, media_type=XLSX_MEDIA)
+
+
+# --- production frontend serving --------------------------------------------
+# Serve the built SPA (app/frontend/dist) from this same process, so a server
+# deployment needs no separate web server: `npm run build` once, then this
+# app serves both the API and the dashboard on one port. Mounted LAST so
+# every API route above wins first; unknown non-API paths fall back to
+# index.html (BrowserRouter deep links like /forecast must not 404).
+# Static files are deliberately outside the X-API-Key gate — the bundle is
+# not secret; the key protects the API responses, which the SPA still has
+# to present the key to read. Skipped silently when no dist/ exists (dev:
+# the Vite dev server on :5173 serves the frontend instead).
+from pathlib import Path as _Path
+
+from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+
+class _SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        # newer Starlette RAISES HTTPException(404) for a missing file
+        # rather than returning a 404 response — handle both. Must catch
+        # Starlette's class: fastapi.HTTPException is a SUBCLASS of it,
+        # and StaticFiles raises the parent
+        try:
+            resp = await super().get_response(path, scope)
+        except _StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            return await super().get_response("index.html", scope)
+        if resp.status_code == 404:
+            resp = await super().get_response("index.html", scope)
+        return resp
+
+
+_FRONTEND_DIST = _Path(__file__).resolve().parents[3] / "frontend" / "dist"
+if (_FRONTEND_DIST / "index.html").exists():
+    app.mount("/", _SPAStaticFiles(directory=_FRONTEND_DIST, html=True),
+              name="frontend")

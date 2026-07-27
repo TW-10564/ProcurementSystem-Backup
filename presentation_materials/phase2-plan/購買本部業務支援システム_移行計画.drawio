@@ -1,0 +1,116 @@
+<mxfile host="app.diagrams.net" version="24.0.0">
+  <diagram id="phase-plan-v1" name="Phase1→Phase2 移行計画">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="950" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="購買本部業務支援システム — Phase 1 → Phase 2 移行アーキテクチャ（3か月計画）" style="text;html=1;fontSize=18;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="15" width="900" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ================= PHASE 1 ================= -->
+        <mxCell id="p1zone" value="Phase 1 — ブリッジ運用（Month 1〜3）：現行構成のまま、NASは読み取りのみ" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#39708d;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="700" height="640" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p1nas" value="NAS（読み取り専用・暫定）&#10;※ Month 3 末に接続撤去" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#a8524c;strokeWidth=2;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="110" width="300" height="255" as="geometry" />
+        </mxCell>
+        <mxCell id="p1one" value="ONE計画 master + 17サブファイル&#10;（534 SKU）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="75" y="155" width="270" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="p1sap" value="SAP抽出：ZM13（在庫）/ ZP21（組込）&#10;※ 内田さんが週次でNASに保存" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="75" y="222" width="270" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="p1sales" value="販売計画ファイル（①〜④・NotePC）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="75" y="289" width="270" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p1srv" value="オンプレサーバー（Docker）&#10;・React フロントエンド&#10;・FastAPI バックエンド&#10;・PostgreSQL&#10;※ NASへの書き込みは一切なし" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e3eef4;strokeColor=#39708d;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="430" y="140" width="280" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="p1users" value="購買本部ユーザー（7〜10名）&#10;ダッシュボード利用は Month 1 から開始&#10;（予測・発注提案・互換チェック）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="430" y="360" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="p1parallel" value="Month 2〜：並行運用&#10;ポータル入力 と ONEファイル をセル単位で照合&#10;（週次パリティレポート ≥99% ×2週 で切替判定）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#faf3d9;strokeColor=#b3a04a;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="420" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="p1note" value="この3か月間のNASアクセスは「読み取り専用・片方向・期限付き」。&#10;撤去は Month 3 の完了条件（成果物）として計画に明記。" style="text;html=1;fontSize=11;fontStyle=2;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="60" y="560" width="640" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p1e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="p1nas" target="p1srv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p1e1l" value="週次取込（読み取りのみ）" style="edgeLabel;html=1;fontSize=10;" vertex="1" connectable="0" parent="p1e1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p1e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="p1srv" target="p1users">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ================= TRANSITION ================= -->
+        <mxCell id="trans" value="Month 3 カットオーバー&#10;パリティ達成 → NAS接続撤去" style="shape=singleArrow;whiteSpace=wrap;html=1;fillColor=#f6e2e0;strokeColor=#a8524c;fontSize=12;fontStyle=1;arrowWidth=0.55;arrowSize=0.35;" vertex="1" parent="1">
+          <mxGeometry x="750" y="300" width="105" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- ================= PHASE 2 ================= -->
+        <mxCell id="p2zone" value="Phase 2 — ポータルが計画の正本（Month 4〜）：NAS不要" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#4a7a54;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="865" y="60" width="695" height="640" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p2plan" value="経営企画部（ブラウザ）&#10;計画入力：CPU・MB・VGA・ケース" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="885" y="115" width="310" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="p2buy" value="購買担当者 7〜10名（ブラウザ）&#10;計画入力：全17カテゴリを一斉移行&#10;（現行サブファイルと同じ担当割り）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="885" y="190" width="310" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="p2sap" value="SAPデータ（ZM13 / ZP21）&#10;ポータルの週次手動アップロード（約5分）&#10;※ 部門方針（手動投入）に合致・唯一の外部データ" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f6e2e0;strokeColor=#a8524c;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="885" y="280" width="310" height="75" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p2srv" value="オンプレサーバー（Docker・同一構成）&#10;・計画入力／承認（版管理・監査ログ）&#10;・予測エンジン＋精度検証ゲート&#10;・PostgreSQL ＝ 計画の正本（System of Record）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e3eef4;strokeColor=#39708d;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="1250" y="140" width="290" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="p2out" value="ダッシュボード ＋ Excel出力&#10;（Excelは「入力」から「出力専用」へ）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1250" y="370" width="290" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="p2arch" value="ONE Excel：読み取り専用アーカイブ&#10;（マスター集計作業は廃止 → 集計ズレも解消）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#eceeec;strokeColor=#6b7570;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="885" y="390" width="310" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="p2note" value="NAS・ONEファイルへの依存ゼロ。残る外部入力はSAPのみ＝手動アップロード。&#10;SAP直接連携は Phase 3 の選択肢（今回スコープ外）。" style="text;html=1;fontSize=11;fontStyle=2;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="885" y="560" width="640" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p2e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="p2plan" target="p2srv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p2e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="p2buy" target="p2srv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p2e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="p2sap" target="p2srv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p2e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="p2srv" target="p2out">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ================= TIMELINE ================= -->
+        <mxCell id="tlzone" value="3か月タイムライン" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#5c6870;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="730" width="1520" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="tlm1" value="Month 1&#10;・サーバー展開（Docker＋PostgreSQL移行）&#10;・NASデータで本番運用開始（ダッシュボード利用開始）&#10;・計画入力画面の開発着手（全17カテゴリ＋企画4部材）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e3eef4;strokeColor=#39708d;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="60" y="760" width="480" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="tlm2" value="Month 2&#10;・ONE履歴データの一括取込（シードデータ）&#10;・並行運用開始：ポータル入力＋Excel継続&#10;・週次パリティレポートで両者をセル単位比較" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#faf3d9;strokeColor=#b3a04a;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="560" y="760" width="480" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="tlm3" value="Month 3&#10;・パリティ ≥99% ×2週 → カットオーバー&#10;・ONE集計停止／Excelは出力専用化&#10;・NAS接続撤去（Phase 1 完了条件）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#4a7a54;fontSize=11;fontStyle=0;align=left;spacingLeft=10;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="760" width="480" height="130" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

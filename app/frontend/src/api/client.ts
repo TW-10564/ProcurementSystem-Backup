@@ -199,7 +199,21 @@ export const api = {
 export async function downloadReport(path: string, fallbackName: string): Promise<void> {
   const res = await http.get<Blob>(path, { responseType: "blob" });
   const disposition = res.headers["content-disposition"] as string | undefined;
-  const filename = disposition?.match(/filename="?([^";]+)"?/)?.[1] ?? fallbackName;
+  // Starlette sends non-ASCII names as RFC 5987 `filename*=utf-8''%E9%9C...`
+  // (percent-encoded) — check that form first, else the exports' Japanese
+  // filenames (需要予測_企画4部材_….xlsx) silently degrade to fallbackName.
+  const star = disposition?.match(/filename\*=utf-8''([^;]+)/i)?.[1];
+  const plain = disposition?.match(/filename="?([^";]+)"?/)?.[1];
+  let filename = fallbackName;
+  if (star) {
+    try {
+      filename = decodeURIComponent(star);
+    } catch {
+      filename = plain ?? fallbackName;
+    }
+  } else if (plain) {
+    filename = plain;
+  }
   const url = URL.createObjectURL(res.data);
   const a = document.createElement("a");
   a.href = url;

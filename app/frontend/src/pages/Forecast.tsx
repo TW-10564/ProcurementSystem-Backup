@@ -393,8 +393,15 @@ export default function Forecast() {
   const [showOrders, setShowOrders] = useState(false);
   const [orderSearch, setOrderSearch] = useState("");
   const [showOrderedItems, setShowOrderedItems] = useState(false);
+  // Which ownership slice the Excel export covers: all parts, planning's
+  // 4 categories (tier 1), or purchasing's derived parts (tier 2).
+  const [exportTier, setExportTier] = useState<"all" | "1" | "2">("all");
   const listRef = useRef<HTMLDivElement | null>(null);
   const ordersRef = useRef<HTMLDivElement | null>(null);
+  // Rebuild polling lives in refs, not component state: the timer must be
+  // cancellable on unmount (tab switch) and must never be started twice.
+  const rebuildTimer = useRef<number | null>(null);
+  const rebuildPolling = useRef(false);
 
   const loadSummary = () =>
     api.forecastSummary().then(setSummary).catch((e) => setError(String(e.message ?? e)));
@@ -405,10 +412,78 @@ export default function Forecast() {
   const loadOrders = () =>
     api.orderSuggestions().then(setOrders).catch((e) => setError(String(e.message ?? e)));
 
+  // Poll /build/rebuild/status until it leaves "running". Transient fetch
+  // failures are EXPECTED here — the backend is busy re-ingesting every NAS
+  // source and a poll can time out — so a failed poll retries (slower)
+  // instead of surfacing "Network Error"; only ~2 minutes of consecutive
+  // failures gives up. Idempotent: a second call while active is a no-op,
+  // so mount-resume and the button can't double-poll.
+  const startRebuildPolling = () => {
+    if (rebuildPolling.current) return;
+    rebuildPolling.current = true;
+    setRebuilding(true);
+    let failures = 0;
+    const tick = async () => {
+      try {
+        const s = await api.rebuildStatus();
+        failures = 0;
+        if (s.status === "running") {
+          rebuildTimer.current = window.setTimeout(tick, 3000);
+          return;
+        }
+        rebuildPolling.current = false;
+        setRebuilding(false);
+        api.rebuildHistory(10).then(setRebuildHistory).catch(() => {});
+        if (s.status === "done") {
+          const ship = s.report?.sap_shipments;
+          const nas = s.report?.nas_refresh;
+          const base = ship
+            ? t("fc_rebuild_done_with_shipments", { resolved: ship.resolved, unresolved: ship.unresolved })
+            : t("fc_rebuild_done");
+          const nasNote =
+            nas?.status === "ok"
+              ? t("fc_rebuild_nas_refreshed", { files: nas.files_in_cache ?? 0 })
+              : nas?.status === "skipped"
+                ? t("fc_rebuild_nas_skipped")
+                : nas?.status === "error"
+                  ? t("fc_rebuild_nas_error", { reason: nas.reason ?? "" })
+                  : "";
+          setRebuildFlash(nasNote ? `${base} ${nasNote}` : base);
+          loadSummary();
+        } else if (s.status === "error") {
+          setRebuildError(s.error ?? t("fc_rebuild_error_unknown"));
+        }
+      } catch (e: unknown) {
+        failures += 1;
+        if (failures < 20) {
+          rebuildTimer.current = window.setTimeout(tick, 6000);
+          return;
+        }
+        rebuildPolling.current = false;
+        setRebuilding(false);
+        setRebuildError(String((e as Error).message ?? e));
+      }
+    };
+    tick();
+  };
+
   useEffect(() => {
     loadSummary();
     loadTier2Preview();
     api.rebuildHistory(10).then(setRebuildHistory).catch(() => {});
+    // A rebuild started before this mount (other tab, other browser, or a
+    // scheduled one) must re-attach: without this, navigating away and back
+    // silently dropped the progress indicator.
+    api.rebuildStatus()
+      .then((s) => { if (s.status === "running") startRebuildPolling(); })
+      .catch(() => {});
+    return () => {
+      // Unmount (tab switch): stop the timer so no setState fires on a dead
+      // component; the mount check above resumes polling on return.
+      if (rebuildTimer.current !== null) window.clearTimeout(rebuildTimer.current);
+      rebuildPolling.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Lazy-load: the order-suggestions detail is only fetched the first time
@@ -450,39 +525,7 @@ export default function Forecast() {
         return;
       }
     }
-    const poll = async () => {
-      try {
-        const s = await api.rebuildStatus();
-        if (s.status === "running") {
-          setTimeout(poll, 3000);
-          return;
-        }
-        setRebuilding(false);
-        api.rebuildHistory(10).then(setRebuildHistory).catch(() => {});
-        if (s.status === "done") {
-          const ship = s.report?.sap_shipments;
-          const nas = s.report?.nas_refresh;
-          const base = ship
-            ? t("fc_rebuild_done_with_shipments", { resolved: ship.resolved, unresolved: ship.unresolved })
-            : t("fc_rebuild_done");
-          const nasNote =
-            nas?.status === "ok"
-              ? t("fc_rebuild_nas_refreshed", { files: nas.files_in_cache ?? 0 })
-              : nas?.status === "skipped"
-                ? t("fc_rebuild_nas_skipped")
-                : nas?.status === "error"
-                  ? t("fc_rebuild_nas_error", { reason: nas.reason ?? "" })
-                  : "";
-          setRebuildFlash(nasNote ? `${base} ${nasNote}` : base);
-        } else if (s.status === "error") {
-          setRebuildError(s.error ?? t("fc_rebuild_error_unknown"));
-        }
-      } catch (e: unknown) {
-        setRebuilding(false);
-        setRebuildError(String((e as Error).message ?? e));
-      }
-    };
-    poll();
+    startRebuildPolling();
   };
 
   const run = async () => {
@@ -608,8 +651,28 @@ export default function Forecast() {
             <h2>{t("fc_title")}</h2>
             <p>{t("fc_sub")}</p>
           </div>
-          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-            <button className="btn" onClick={() => downloadReport("/export/forecasts", "forecasts.xlsx")}>
+          <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center", flexWrap: "wrap" }}>
+            <select
+              value={exportTier}
+              onChange={(e) => setExportTier(e.target.value as "all" | "1" | "2")}
+              title={t("fc_export_scope_hint")}
+              style={{ padding: "6px 8px" }}
+            >
+              <option value="all">{t("fc_export_scope_all")}</option>
+              <option value="1">{t("fc_export_scope_tier1")}</option>
+              <option value="2">{t("fc_export_scope_tier2")}</option>
+            </select>
+            <button
+              className="btn"
+              onClick={() =>
+                downloadReport(
+                  exportTier === "all" ? "/export/forecasts" : `/export/forecasts?tier=${exportTier}`,
+                  exportTier === "1" ? "需要予測_企画4部材.xlsx"
+                    : exportTier === "2" ? "需要予測_購買部材.xlsx"
+                    : "需要予測_全部材.xlsx",
+                )
+              }
+            >
               {t("common_download_excel")}
             </button>
             <button className="btn" onClick={rebuildFromNas} disabled={rebuilding} title={t("fc_rebuild_hint")}>

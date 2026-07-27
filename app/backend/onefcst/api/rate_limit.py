@@ -6,25 +6,28 @@ so an in-memory counter is enough; no Redis or similar needed. Disabled by
 default (RATE_LIMIT_PER_MINUTE=0) — the dev default, same stance as
 API_KEY in auth.py, so local work isn't blocked.
 
-Client identity: the X-API-Key header value if present, else the request's
-source IP. Keying by API key (not just IP) matters here because this app
-is gated by a SINGLE SHARED key (see auth.py) — everyone behind that key
-looks like "the same client" from an IP-based scheme only if they also
-share an IP, which isn't guaranteed (VPN, office NAT, etc. can differ).
-Keying by the key itself catches abuse regardless of source IP; falling
-back to IP only matters for the pre-auth case (no key sent at all, e.g.
-brute-forcing the key blind) so those attempts are still capped.
+Client identity: the X-API-Key header value — but only when it's the
+VALID key — else the request's source IP. Keying by the valid key matters
+because this app is gated by a SINGLE SHARED key (see auth.py): everyone
+behind it can sit on different IPs (VPN, office NAT), and keying on the
+key catches abuse regardless of source. But an UNVERIFIED header must
+never be the identity: a brute-forcer would then get a fresh window with
+every wrong guess, defeating the exact attack this module exists to slow
+down (found in the 2026-07-24 pre-deploy audit). Invalid/absent keys all
+fall back to source IP, so blind guessing shares one capped window per IP.
 
 /health is exempt — same reasoning as auth.py: a liveness-probe endpoint
 must never be the thing that trips a rate limit."""
 from __future__ import annotations
 
+import hmac
 import time
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .. import config
 from ..config import RATE_LIMIT_PER_MINUTE
 
 WINDOW_SECONDS = 60
@@ -43,8 +46,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not RATE_LIMIT_PER_MINUTE or request.url.path == "/health":
             return await call_next(request)
 
-        client_id = request.headers.get("x-api-key") or (
-            request.client.host if request.client else "unknown")
+        sent_key = request.headers.get("x-api-key")
+        # config.API_KEY read at request time (not import time) so tests
+        # that monkeypatch the key see the current value
+        if sent_key and config.API_KEY and hmac.compare_digest(
+                sent_key.encode(), config.API_KEY.encode()):
+            client_id = sent_key
+        else:
+            client_id = request.client.host if request.client else "unknown"
         now = time.monotonic()
         if len(self._windows) > PRUNE_THRESHOLD:
             self._windows = {k: v for k, v in self._windows.items()

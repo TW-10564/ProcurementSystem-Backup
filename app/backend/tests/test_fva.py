@@ -7,7 +7,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from onefcst.models import Base, Item, ForecastRun, Forecast, Adjustment, Actual
+from onefcst.models import (Base, Item, ForecastRun, Forecast, Adjustment,
+                            Actual, WeeklyActual)
 from onefcst.verify.fva import _original_baseline, scoreable_adjustments
 
 
@@ -72,6 +73,10 @@ def test_fva_shows_adjustment_helped_when_it_actually_did(session):
     session.add(Forecast(run_id=run.id, item_id=item.id, month=target_month,
                          baseline=20.0, method="seasonal"))
     session.add(Actual(item_id=item.id, month=target_month, qty=75.0, source="test"))
+    # the 2026-07-17 incomplete-SAP-month gate skips any month with no SAP
+    # weekly coverage from day 1 — seed one row so the month counts as closed
+    session.add(WeeklyActual(item_id=item.id, week_start=target_month,
+                             qty=20.0, source="SAP"))
     adj = Adjustment(item_id=item.id, month=target_month, old_value=None,
                      new_value=78.0, scope="sku", reason="X3D phase-out",
                      author="tester", created_at=datetime(2026, 4, 15))

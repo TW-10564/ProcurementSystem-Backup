@@ -44,6 +44,22 @@ SAP_ACCDB_PATH = Path(os.environ.get("SAP_ACCDB_PATH", str(ONE_DIR / "SAP在庫�
 NAME_CROSSWALK_GLOB = os.environ.get("NAME_CROSSWALK_GLOB",
                                      str(SAP_DIR / "SAP部材管理*.xlsx"))
 
+# 内田さん's weekly SAP drops on the NAS (agreed 2026-07-27): one folder for
+# ZM13 週頭在庫 snapshots (在庫_MMDD.xlsx), one for ZP21 組込実績 weeks
+# (組込_MMDD_MMDD.xlsx). nas_sync.refresh_from_nas() mirrors both into
+# SAP_DIR subfolders on every rebuild; sap_stock_history / sap_zp21 then
+# discover the files content-based under SAP_DIR — no further wiring needed.
+# UNC paths are used directly (not the Z: drive letter) because these folders
+# live under 購買本部\【通常業務】\ONE on the share, not under Z:'s root.
+NAS_ZM13_UNC = os.environ.get(
+    "ONEFCST_NAS_ZM13_UNC",
+    r"\\172.25.20.11\サードウェーブグループ\43上期\サードウェーブ\購買本部\【通常業務】\ONE\★週頭在庫(ZM13)")
+NAS_ZP21_UNC = os.environ.get(
+    "ONEFCST_NAS_ZP21_UNC",
+    r"\\172.25.20.11\サードウェーブグループ\43上期\サードウェーブ\購買本部\【通常業務】\ONE\★組込実績(ZP21)")
+NAS_ZM13_CACHE = SAP_DIR / "週頭在庫_ZM13"
+NAS_ZP21_CACHE = SAP_DIR / "組込実績_ZP21"
+
 ONE_MASTER = ONE_DIR / "ONE計画.xlsm"
 NOTE_ONE_MASTER = ONE_DIR / "NoteONE計画.xlsm"
 NOTE_STOCK_PLAN = PLANNING_DIR / "ノート在庫使用計画_43期.xlsx"
@@ -81,6 +97,12 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 TIER1_CATEGORIES = {"CPU", "グラフィックカード", "ﾏｻﾞｰﾎﾞｰﾄﾞ", "PCｹｰｽ"}
 
 FISCAL_START_MONTH = 8      # 期 runs Aug–Jul
+
+# Order-suggestion flag threshold (engine/stock_projection.py suggest_order):
+# an MOQ-rounded order is flagged "MOQ-driven" once it covers more than this
+# many months of the item's average demand. Default 6 (see that module's
+# 2026-07-17 comment for the packaging-item case that motivated the flag).
+MOQ_EXCESSIVE_MONTHS = float(os.environ.get("ONEFCST_MOQ_EXCESSIVE_MONTHS", "6"))
 
 # --- scheduler ----------------------------------------------------------------
 # Automatic recurring forecast generation (scheduler.py). Runs in-process

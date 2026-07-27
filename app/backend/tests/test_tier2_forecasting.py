@@ -88,15 +88,25 @@ def test_generate_tier2_reports_honest_counts(session):
     series = _series_by_item(session)
     items = {i.id: i for i in session.query(Item).all()}
     start = date.fromisoformat(note["start_month"])
+    # mirror forecasting.generate: eol_flag items are skipped by the SKU
+    # engine BEFORE make_forecast, so they never enter already_forecasted
+    # even when a forecast would have been possible
     already = {iid for iid, obs in series.items()
-              if baseline.make_forecast(obs, start, note["horizon"]) is not None}
+              if not (items.get(iid) is not None and items[iid].eol_flag)
+              and baseline.make_forecast(obs, start, note["horizon"]) is not None}
+    # mirror production's gate order (tier2_forecasting.generate): eol_flag
+    # items are bucketed as discontinued BEFORE the MIN_HISTORY gate, so
+    # they count as candidates regardless of history length; the history
+    # filter only applies to non-eol items
     candidates = [iid for iid, obs in series.items()
                  if iid not in already
                  and items.get(iid) is not None
                  and items[iid].category not in TIER1_CATEGORIES
-                 and len(obs) >= tier2_forecasting.MIN_HISTORY_MONTHS]
+                 and (items[iid].eol_flag
+                      or len(obs) >= tier2_forecasting.MIN_HISTORY_MONTHS)]
     total_accounted = (t2["items_forecasted"] + t2["items_skipped_stale"]
-                      + t2["items_skipped_no_attach_rate"])
+                      + t2["items_skipped_no_attach_rate"]
+                      + t2.get("items_skipped_discontinued", 0))
     assert total_accounted == len(candidates)
 
 

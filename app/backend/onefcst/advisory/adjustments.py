@@ -10,6 +10,7 @@ change, but now attributable and auditable instead of silently invisible.
 from __future__ import annotations
 
 import json
+from datetime import date
 
 from ..models import Adjustment, AuditLog
 
@@ -21,6 +22,13 @@ def record_adjustment(session, *, item_id: int | None, month, old_value: float |
         raise ValueError("adjustment reason is required (BR-003: accountability)")
     if scope not in ("global", "category", "sku"):
         raise ValueError("scope must be one of: global, category, sku")
+    # forecast months are always day-1; a mid-month date (e.g. 2026-05-15,
+    # easy to submit via the API) would be stored verbatim and then never
+    # match any forecast month in _latest_adjustments / FVA — silently dead
+    if month is not None:
+        if isinstance(month, str):
+            month = date.fromisoformat(month)
+        month = month.replace(day=1)
     adj = Adjustment(run_id=run_id, item_id=item_id, month=month,
                      old_value=old_value, new_value=new_value, factor=factor,
                      scope=scope, reason=reason.strip(), author=author)

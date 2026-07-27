@@ -34,13 +34,17 @@ def find_breach_month(projected: list[float], safety_stock: float) -> int | None
     return None
 
 
-MOQ_EXCESSIVE_MONTHS = 6   # flag when the final MOQ-rounded order covers
-                           # more than this many months of average demand
+MOQ_EXCESSIVE_MONTHS = 6   # default flag threshold — months of average demand
+                           # a final MOQ-rounded order must exceed to be
+                           # flagged; callers may override via
+                           # moq_excessive_months (see config.MOQ_EXCESSIVE_MONTHS
+                           # for the env-configurable value used in production)
 
 
 def suggest_order(*, current_balance: float, monthly_demand: list[float],
                   moq: float | None, lead_time_days: float | None,
-                  min_stock_days: float | None, avg_monthly_demand: float | None = None
+                  min_stock_days: float | None, avg_monthly_demand: float | None = None,
+                  moq_excessive_months: float = MOQ_EXCESSIVE_MONTHS
                   ) -> dict:
     """Returns a suggestion dict — never an executed action.
 
@@ -96,7 +100,7 @@ def suggest_order(*, current_balance: float, monthly_demand: list[float],
     # from "this is MOQ forcing 70 years of stock" without this flag.
     moq_months_of_cover = round(qty / demand_avg, 1) if demand_avg > 0 else None
     moq_excessive = bool(moq_applied and moq_months_of_cover is not None
-                         and moq_months_of_cover > MOQ_EXCESSIVE_MONTHS)
+                         and moq_months_of_cover > moq_excessive_months)
 
     return {"action": "suggest_order", "order_by_month_index": order_by_index,
            "breach_month_index": breach, "suggested_qty": round(qty, 1),
