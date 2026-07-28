@@ -8,14 +8,16 @@ from datetime import date, datetime
 
 from .config import ONE_MASTER, NOTE_ONE_MASTER, planning_file
 from .db import init_db, get_session, engine
-from .models import Base, Snapshot, PlanValue, StockState, Actual, WeeklyActual, Item
+from .models import (Base, Snapshot, PlanValue, StockState, Actual, WeeklyActual,
+                     Item, ItemAlias)
 from .ingestion import (one_master, notepc_forecast, planning4, planning1, subfiles, sap,
                        sap_shipments, sap_stock_history, sap_zp21)
 from .ingestion.sap_shipment_overrides import resolve_shipment_override
 from .ingestion.excel import file_meta
 from .ingestion.subfile_config import FILES as SUBFILE_CFG, BASE as SUBFILE_BASE
 from .registry.build import (build_registry, resolve, resolve_via_source,
-                             build_normalized_alias_index, resolve_any)
+                             build_normalized_alias_index, resolve_any,
+                             _norm_for_crosswalk)
 
 from pathlib import Path as _Path
 
@@ -284,6 +286,7 @@ def run() -> dict:
 
     # 5. sub-file 部品詳細 series (level='one_row') + stock snapshot
     total_series, total_stock = 0, 0
+    subfile_only_created = 0
     for cat in subfiles.all_categories():
         result = subfiles.parse_subfile_series(cat, snapshot_date=date.today())
         st = result["stats"]
@@ -295,6 +298,40 @@ def run() -> dict:
         srcpath = _Path(cfgpath.get("_abspath") or (SUBFILE_BASE / cfgpath["file"]))
         snap_s = _snapshot(session, srcpath, "部品詳細",
                            len(result["series"]) + len(result["stock"]), "PASS", st["note"])
+        # Pre-pass: register SKUs that exist ONLY in this sub-file. Found
+        # 2026-07-27 via the FAN file: 静音パック(AMD)/(Intel) (~12.5k units
+        # of stock each) and a CAHPS-M2+Heatsink combo row live only in
+        # 部品詳細, never in the master's 部品予測 — the registry (built
+        # from master sources) had no item for them, so their series and
+        # stock rows below were stored with item_id=None, invisible to
+        # every view and never forecasted. Create a tier-2 item per such
+        # SKU (category = this sub-file's key, subcategory 'subfile-only'
+        # so they stay distinguishable from master-backed items). Only
+        # rows carrying real data qualify — a name with no series values
+        # and no stock balance is a placeholder row, not a part.
+        has_data: set[str] = {p["adana"] for p in result["series"]
+                              if p["value"] is not None}
+        has_data |= {srow["adana"] for srow in result["stock"]
+                     if srow["balance"] is not None}
+        created_here = 0
+        for adana in sorted(has_data):
+            if resolve_any(session, norm_index, adana,
+                           prefer_source="ONE綽名") is not None:
+                continue
+            new_item = Item(canonical_name=adana, kind="part", category=cat,
+                            subcategory="subfile-only", tier=2)
+            session.add(new_item)
+            session.flush()
+            session.add(ItemAlias(item_id=new_item.id, alias=adana,
+                                  source_system="ONE綽名"))
+            nkey = _norm_for_crosswalk(adana)
+            if nkey and nkey not in norm_index:
+                norm_index[nkey] = new_item
+            created_here += 1
+        if created_here:
+            subfile_only_created += created_here
+            print(f"  [{cat:<11}] registered {created_here} subfile-only SKU(s) "
+                  f"absent from the master registry")
         for p in result["series"]:
             item = resolve_any(session, norm_index, p["adana"], prefer_source="ONE綽名")
             session.add(PlanValue(snapshot_id=snap_s.id, item_id=item.id if item else None,
@@ -313,7 +350,9 @@ def run() -> dict:
         if st.get("excluded_incomplete_months"):
             print(f"    excluded partial-coverage months (file's own column "
                   f"range clips into these): {', '.join(st['excluded_incomplete_months'])}")
-    print(f"[sub-files] total series cells={total_series}  stock rows={total_stock}")
+    print(f"[sub-files] total series cells={total_series}  stock rows={total_stock}  "
+          f"subfile-only items registered={subfile_only_created}")
+    report["registry"]["subfile_only_items_created"] = subfile_only_created
 
     # 6. SAP physical stock
     sap_result = sap.parse_sap_stock()
