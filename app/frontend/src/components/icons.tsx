@@ -93,6 +93,16 @@ export function NotificationsIcon({ className }: IconProps) {
   );
 }
 
+export function HelpIcon({ className }: IconProps) {
+  // play triangle inside a circle — "watch the guide", not a generic "?"
+  return (
+    <svg {...base} className={className}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M10 8.5l6 3.5-6 3.5z" />
+    </svg>
+  );
+}
+
 export function LogoutIcon({ className }: IconProps) {
   return (
     <svg {...base} className={className}>

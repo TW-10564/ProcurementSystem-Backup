@@ -30,6 +30,8 @@ export const translations = {
   nav_discontinuation: { ja: "廃番リスク", en: "Discontinuation Risk" },
   nav_section_plan: { ja: "計画・調整", en: "Planning & Adjustments" },
   nav_adjustments: { ja: "調整履歴", en: "Adjustments" },
+  nav_section_help: { ja: "ヘルプ", en: "Help" },
+  nav_help: { ja: "使い方ガイド", en: "How to Use" },
   nav_section_ops: { ja: "運用", en: "Operations" },
   nav_notifications: { ja: "通知・変更履歴", en: "Notifications & Audit Log" },
 
@@ -276,6 +278,15 @@ export const translations = {
   fc_run_done: { ja: "予測を更新しました（実行 #{id}）", en: "Forecast updated (run #{id})" },
   fc_rebuild: { ja: "NASから再取込み", en: "Rebuild from NAS" },
   fc_rebuilding: { ja: "再取込み中（約4分）…", en: "Rebuilding (~4 min)…" },
+  fc_rebuild_progress_title: {
+    ja: "NAS から再取込み中…",
+    en: "Rebuilding from NAS…",
+  },
+  fc_rebuild_progress_starting: { ja: "開始中…", en: "starting…" },
+  fc_rebuild_progress_hint: {
+    ja: "全ソースを読み直しています。完了までこの画面を閉じても処理は続きます（他の画面は一時的に遅くなります）。",
+    en: "Re-reading every source. You can leave this page — the rebuild continues (other pages may be slow meanwhile).",
+  },
   fc_rebuild_hint: {
     ja: "ONE・SAPの最新データをNASから取り込みます。完了後は「予測を再計算」でこのデータを反映してください。",
     en: "Re-ingests the latest ONE/SAP data from the NAS. Click Recalculate afterward to reflect it in the forecast.",
@@ -315,6 +326,15 @@ export const translations = {
   },
   fc_rebuild_error_prefix: { ja: "再取込みに失敗しました", en: "Rebuild failed" },
   fc_rebuild_error_unknown: { ja: "不明なエラーが発生しました", en: "An unknown error occurred" },
+  maint_title: { ja: "ただいまシステム更新中です", en: "System under development" },
+  maint_default_body: {
+    ja: "担当者が作業中のため、一時的に表示が乱れたり、操作できない場合があります。しばらくお待ちください。",
+    en: "Someone is working on the system right now, so pages may look odd or stop responding for a short while. Please bear with us.",
+  },
+  maint_since: { ja: "開始", en: "Started" },
+  maint_retry: { ja: "再読み込み", en: "Reload" },
+  maint_dismiss: { ja: "閉じて閲覧を続ける（表示が不安定な場合があります）", en: "Continue anyway (the site may behave oddly)" },
+  maint_banner: { ja: "メンテナンス中：表示が不安定な場合があります", en: "Maintenance in progress — the site may behave oddly" },
   fc_rebuild_history_show: { ja: "再取込み履歴を表示", en: "Show rebuild history" },
   fc_rebuild_history_hide: { ja: "再取込み履歴を隠す", en: "Hide rebuild history" },
   fc_rebuild_history_th_trigger: { ja: "実行元", en: "Trigger" },
@@ -435,6 +455,15 @@ export const translations = {
     ja: "上記4カテゴリ以外、購買部門が管理する全部材を表示。多くは実績データに基づく確定予測で、Tier-2派生予測はその一部です。",
     en: "Every part outside those 4 categories, owned by purchasing. Most still have a real committed forecast — Tier-2 derived forecasts are only a subset of this.",
   },
+  fc_detail_product_name_tooltip: {
+    ja: "SAPの正式品名（SYONAME）。上の見出しはONE各ファイルの結合キーである綽名です。",
+    en: "Full SAP product name (SYONAME). The heading above is the 綽名 nickname used as the join key across the ONE files.",
+  },
+  // Short forms of the two tier labels above, for the per-row badge in the
+  // forecast table — the full filter-chip wording is far too long for a
+  // table column and used to clip mid-word. Full text stays in the tooltip.
+  fc_tier_badge_1: { ja: "計画部門", en: "Planning" },
+  fc_tier_badge_2: { ja: "購買部門", en: "Purchasing" },
   fc_th_items: { ja: "SKU数", en: "SKUs" },
   fc_th_next3: { ja: "3か月合計", en: "Next 3 mo" },
   fc_th_next6: { ja: "6か月合計", en: "Next 6 mo" },
@@ -710,6 +739,107 @@ export const translations = {
   notif_th_when: { ja: "日時", en: "Date/time" },
   notif_th_who: { ja: "担当者", en: "Author" },
   notif_th_what: { ja: "内容", en: "Detail" },
+
+  // ── Help / How to Use ────────────────────────────────────────────────
+  help_title: { ja: "使い方ガイド", en: "How to Use This System" },
+  help_sub: {
+    ja: "購買本部・経営企画部の担当者向けの操作ガイドです。デモ動画で全体の流れを確認し、下の解説で予測精度の指標（WAPE）の読み方を確認してください。",
+    en: "A walkthrough for the purchasing and planning teams. Watch the demo for the overall flow, then read the section below on how to read the forecast-accuracy figure (WAPE).",
+  },
+
+  help_video_section: { ja: "デモ動画", en: "Demo Video" },
+  help_video_title: { ja: "システム操作デモ", en: "System walkthrough" },
+  help_video_desc: {
+    ja: "ログインから予測の確認、発注提案、人手による調整までの一連の流れを実際の画面で説明します。表示言語（日本語 / EN）を切り替えると、対応する言語の動画に切り替わります。",
+    en: "Covers the full flow on real screens: signing in, reviewing forecasts, order suggestions, and recording a human adjustment. Switching the site language (日本語 / EN) switches to the matching narration.",
+  },
+  help_video_missing_title: { ja: "動画は未登録です", en: "No video uploaded yet" },
+  help_video_missing_body: {
+    ja: "動画ファイルをこの場所に置くと、このページで自動的に再生できるようになります（サーバー再起動は不要です）。",
+    en: "Drop the video file at the path below and it will play here automatically — no server restart needed.",
+  },
+  help_video_missing_hint: {
+    ja: "推奨形式: MP4（H.264 / AAC）、画面解像度 1920×1080、ファイルサイズ 200MB 以下。",
+    en: "Recommended: MP4 (H.264 / AAC), 1920×1080, under 200 MB.",
+  },
+  help_video_unsupported: {
+    ja: "お使いのブラウザは動画再生に対応していません。",
+    en: "Your browser cannot play this video.",
+  },
+
+  // WAPE explainer
+  help_wape_section: { ja: "予測精度（WAPE）の見方", en: "Reading the Accuracy Figure (WAPE)" },
+  help_wape_title: { ja: "WAPE とは", en: "What WAPE means" },
+  help_wape_plain: {
+    ja: "WAPE は「予測が実績から平均してどれだけ外れたか」を表す割合です。数字が小さいほど予測が当たっています。WAPE 20% は、予測が実績から平均して 20% ずれていたという意味です。",
+    en: "WAPE is how far the forecast missed the actual demand, as a percentage. Smaller is better. A WAPE of 20% means the forecast was off by about 20% of the volume that actually moved.",
+  },
+  help_wape_formula_label: { ja: "計算式", en: "Formula" },
+  help_wape_formula_words: {
+    ja: "各月の「予測 − 実績」の差を絶対値（プラスマイナスを外した値）で合計し、同じ期間の実績の合計で割ります。",
+    en: "Add up the gap between forecast and actual for each month, ignoring whether it was over or under, then divide by the total actual demand for the same months.",
+  },
+  help_wape_example_label: { ja: "計算例", en: "Worked example" },
+  help_wape_example_intro: {
+    ja: "ある部材の3か月分の予測と実績が次の場合：",
+    en: "Say a part's forecast and actual for three months were:",
+  },
+  help_wape_th_month: { ja: "月", en: "Month" },
+  help_wape_th_forecast: { ja: "予測", en: "Forecast" },
+  help_wape_th_actual: { ja: "実績", en: "Actual" },
+  help_wape_th_gap: { ja: "差（絶対値）", en: "Gap (absolute)" },
+  help_wape_th_total: { ja: "合計", en: "Total" },
+  help_wape_example_calc: {
+    ja: "差の合計 150 ÷ 実績の合計 1,000 = 15%。つまりこの部材の WAPE は 15% です。",
+    en: "Total gap 150 ÷ total actual 1,000 = 15%. So this part's WAPE is 15%.",
+  },
+  help_wape_why_abs: {
+    ja: "プラスマイナスを外して合計するのが重要です。ある月に +100 外し、別の月に −100 外した場合、そのまま足すと 0 になり「完璧な予測」に見えてしまいますが、実際にはどちらの月も在庫が合っていません。",
+    en: "Ignoring the direction of the miss matters. If one month is over by 100 and the next is under by 100, simply adding them gives zero — a \"perfect\" forecast — when in reality the stock was wrong in both months.",
+  },
+
+  help_wape_two_numbers_title: {
+    ja: "2つの WAPE が表示される理由",
+    en: "Why two WAPE numbers are shown",
+  },
+  help_wape_near_term: {
+    ja: "翌月（M+1）WAPE — 翌月だけを予測したときの誤差。発注は基本的に直近の需要に対して行うため、担当者が実際に判断に使うのはこちらの数字です。画面で大きく表示されるのはこの値です。",
+    en: "Near-term (M+1) WAPE — the error when forecasting just next month. Buyers act mostly on near-term demand, so this is the number to judge by, and it is the one shown prominently.",
+  },
+  help_wape_full_horizon: {
+    ja: "6か月（全期間）WAPE — 6か月先までをまとめて評価した誤差。先の月ほど予測は外れやすいため、通常この値は翌月 WAPE より大きくなります。中期の見通しの参考値です。",
+    en: "6-month (full horizon) WAPE — the error across all six forecast months. Months further out are inherently harder, so this is normally the larger of the two. Treat it as a medium-term guide.",
+  },
+  help_wape_gap_note: {
+    ja: "翌月 2%・6か月 56% のように大きく差が開くことは異常ではありません。「来月の発注量は信頼できるが、半年先の見通しはあくまで目安」という意味です。",
+    en: "A wide gap — say 2% near-term and 56% full-horizon — is not a fault. It means \"next month's order quantity is dependable, the half-year outlook is only a guide.\"",
+  },
+
+  help_wape_bands_title: { ja: "数字の目安", en: "How to read the number" },
+  help_wape_band_good: { ja: "60% 以下 — 良好", en: "60% or less — Good" },
+  help_wape_band_good_body: {
+    ja: "予測をそのまま発注判断の基礎に使えます。",
+    en: "Safe to base an order decision on directly.",
+  },
+  help_wape_band_rough: { ja: "60〜100% — 参考値", en: "60–100% — Indicative" },
+  help_wape_band_rough_body: {
+    ja: "方向性は参考になりますが、数量は担当者の判断で確認してください。",
+    en: "The direction is useful, but check the quantity with your own judgement.",
+  },
+  help_wape_band_poor: { ja: "100% 超 — 信頼度低", en: "Over 100% — Unreliable" },
+  help_wape_band_poor_body: {
+    ja: "需要の変動が大きく統計的な予測が難しい部材です。過去実績と担当者の知見を優先してください。",
+    en: "Demand is too erratic for a statistical forecast. Rely on history and your own knowledge instead.",
+  },
+  help_wape_band_unknown: { ja: "「—」表示 — 検証不可", en: "\"—\" shown — Unvalidated" },
+  help_wape_band_unknown_body: {
+    ja: "実績データが短く、精度を検証できていない新規部材などです。",
+    en: "Too little history to measure accuracy — typically a newly registered part.",
+  },
+  help_wape_caveat: {
+    ja: "WAPE は過去の実績に対して予測がどれだけ当たっていたかを測る指標です。将来を保証するものではありません。最終的な発注判断は必ず担当者が行ってください。",
+    en: "WAPE measures how well the forecast matched the past. It is not a guarantee about the future — the final order decision always stays with the buyer.",
+  },
 };
 
 export type TranslationKey = keyof typeof translations;

@@ -9,6 +9,7 @@ import {
   DashboardIcon,
   DiscontinuationIcon,
   ForecastIcon,
+  HelpIcon,
   LogoutIcon,
   MismatchIcon,
   NotificationsIcon,
@@ -47,6 +48,12 @@ const NAV: { sectionKey: TranslationKey; items: NavItem[] }[] = [
   {
     sectionKey: "nav_section_ops",
     items: [{ to: "/app/notifications", labelKey: "nav_notifications", Icon: NotificationsIcon }],
+  },
+  // Reference material, deliberately last: it's onboarding for the purchasing
+  // and planning teams, not a daily task, so it shouldn't sit above the work.
+  {
+    sectionKey: "nav_section_help",
+    items: [{ to: "/app/help", labelKey: "nav_help", Icon: HelpIcon }],
   },
 ];
 

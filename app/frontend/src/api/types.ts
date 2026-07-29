@@ -333,7 +333,8 @@ export interface ForecastMonth {
 export interface ForecastDetail {
   item: {
     id: number;
-    name: string;
+    name: string;              // 綽名 (nickname) — the join key, often opaque on its own
+    product_name: string | null; // full SAP SYONAME description, null if none is richer
     category: string | null;
     tier: number | null;
     lifecycle: string | null;

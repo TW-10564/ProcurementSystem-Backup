@@ -46,7 +46,14 @@ def find_no_reorder_skus(cat: str) -> set[str]:
         return set()
 
     import openpyxl
-    wb = openpyxl.load_workbook(path, data_only=True)
+    # read_only=True matters a lot here and is safe: ReadOnlyCell still
+    # carries .fill, so the theme-colour check below is unaffected —
+    # verified 2026-07-28 across all 6 .xlsx categories, byte-identical SKU
+    # sets either way. Without it this one scan was the single most
+    # expensive step in the whole build (~29s per file; profiled at 172s of
+    # a ~435s rebuild) because openpyxl materialises the full style object
+    # model for workbooks whose formatting tables run to ~1M named styles.
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     try:
         if "部品詳細" not in wb.sheetnames:
             return set()

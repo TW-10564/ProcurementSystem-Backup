@@ -33,6 +33,74 @@ def file_meta(path: Path) -> dict:
     return {"mtime": datetime.fromtimestamp(st.st_mtime), "checksum": h.hexdigest()}
 
 
+def _calamine_sheet(path: Path, sheet: str | None, required: bool):
+    """(rows, sheet_names) read via python-calamine, normalized to openpyxl's
+    value conventions — or None if calamine can't serve this file.
+
+    Why calamine at all: openpyxl materialises the whole style table before
+    it will hand over a single value, and the ONE workbooks carry ~1M named
+    styles, so `apply_stylesheet` alone was ~61% of a full build (profiled
+    2026-07-28). calamine is a Rust reader that ignores formatting entirely
+    — measured 8.5x faster on ONE_08_VGA's 部品詳細.
+
+    Normalizations applied so callers see EXACTLY what openpyxl gave them:
+      empty cell  calamine "" -> None   (openpyxl's convention; read_dict_rows
+                  and every `if v is None` check downstream depend on it)
+      date cell   calamine datetime.date -> datetime.datetime at midnight
+
+    NOT equivalent in one respect: Excel ERROR cells (#N/A, #DIV/0!) come
+    back as "" from calamine, i.e. None here, where openpyxl yields the
+    literal string "#N/A". Those are never numeric plan values and are
+    already discarded downstream — verified by a full-build diff showing
+    byte-identical Gate A / registry / per-subfile cell counts either way.
+    If a future caller ever needs to SEE error cells, it must use
+    data_only=False (openpyxl) instead."""
+    try:
+        from python_calamine import CalamineWorkbook
+    except ImportError:
+        return None
+    from datetime import date as _date
+    try:
+        wb = CalamineWorkbook.from_path(str(path))
+        names = list(wb.sheet_names)
+        if sheet is None:
+            sheet = names[0]
+        elif sheet not in names:
+            if required:
+                raise KeyError(sheet)
+            # rows=None distinguishes "sheet absent" from "sheet present but
+            # empty" ([]), which read_xlsx_rows must report differently.
+            return None, names
+        # skip_empty_area=False is REQUIRED: the default trims leading empty
+        # rows/columns, which would shift every absolute column index the
+        # per-file layouts in subfile_config.py are pinned to.
+        raw = wb.get_sheet_by_name(sheet).to_python(skip_empty_area=False)
+    except KeyError:
+        raise
+    except Exception:
+        return None                      # any reader problem -> openpyxl path
+    rows = [tuple(_cal_value(v, _date) for v in r) for r in raw]
+    return rows, names
+
+
+def _cal_value(v, _date):
+    """One calamine cell -> the value openpyxl would have produced.
+
+    The int case is NOT cosmetic. calamine returns every number as f64, so a
+    numeric 綽名 — VGA's SKUs are literally 5050/5060/5070/5080/5090 — comes
+    back as 5090.0 and stringifies to "5090.0", which matches NOTHING in the
+    alias registry. 綽名 is the join key for the entire system (see CLAUDE.md),
+    so this silently orphans every numerically-named SKU. openpyxl yields int
+    for whole numbers; mirror that."""
+    if v == "":
+        return None
+    if type(v) is _date:
+        return datetime(v.year, v.month, v.day)
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return v
+
+
 def read_xlsx_rows(path: Path, sheet: str | None = None, max_row: int | None = None,
                    max_col: int | None = None, data_only: bool = True,
                    required: bool = True) -> list[tuple] | None:
@@ -49,6 +117,21 @@ def read_xlsx_rows(path: Path, sheet: str | None = None, max_row: int | None = N
     name_crosswalk.py's crosswalk file may or may not have its expected
     sheet). Callers of genuinely-mandatory sources should leave this True so
     a missing sheet still fails loudly."""
+    # data_only=False means the caller wants FORMULA STRINGS (plan1_chain's
+    # chain check) — calamine only ever returns computed values, so that
+    # request must stay on openpyxl.
+    if data_only:
+        got = _calamine_sheet(path, sheet, required)
+        if got is not None:
+            rows, _names = got
+            if rows is None:              # sheet absent, required=False
+                return None
+            if max_row is not None:
+                rows = rows[:max_row]
+            if max_col is not None:
+                rows = [r[:max_col] for r in rows]
+            return rows
+
     import openpyxl
     wb = openpyxl.load_workbook(path, read_only=True, data_only=data_only,
                                 keep_vba=path.suffix == ".xlsm")
@@ -151,6 +234,15 @@ def read_dict_rows(path: Path, fmt: str, sheet: str) -> tuple[list[dict], bool, 
                 for row in ws.rows():
                     rows.append({c.c: c.v for c in row if c.v is not None})
         return rows, True, names
+    got = _calamine_sheet(path, sheet, required=False)
+    if got is not None:
+        rows_t, names = got
+        if rows_t is None:
+            return [], False, names
+        rows = [{j: v for j, v in enumerate(row) if v is not None}
+                for row in rows_t]
+        return rows, True, names
+
     import openpyxl
     wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
     try:

@@ -129,6 +129,39 @@ def _latest_stock_state(session, item_id: int) -> StockState | None:
     return latest
 
 
+def sap_product_name(session, item: Item) -> str | None:
+    """The full SAP product description (SYONAME) for an item, or None.
+
+    Every view identifies parts by their 綽名 (あだ名) — the short nickname
+    that is the join key across all ONE files. That nickname is often opaque
+    on its own: "RX7600" doesn't say which board it is, "M02" and "緩衝材"
+    say nothing at all. SAP's SYONAME carries the real description
+    ("組ASR RX7600 CL 8GO(G6 1H3P OC)"), and ingestion already stores it on
+    StockState.raw_name — it was simply never surfaced. 530 of ~2.9k items
+    have a description richer than their nickname.
+
+    Not read off _latest_stock_state's chosen row: ingestion writes several
+    StockState rows per item (see _prefer_sap_row) and only the SAP-sourced
+    one carries SYONAME — the ONE-sourced row just repeats the nickname. So
+    scan every row for the most descriptive name instead of trusting one.
+    """
+    rows = (session.query(StockState.raw_name)
+            .filter(StockState.item_id == item.id,
+                    StockState.raw_name.isnot(None)).all())
+    canonical = (item.canonical_name or "").strip()
+    # Longest name that actually says more than the nickname already does.
+    best = None
+    for (name,) in rows:
+        name = (name or "").strip()
+        if not name or name == canonical:
+            continue
+        if len(name) <= len(canonical):
+            continue          # a bare code (e.g. "14700F") — no more use than the nickname
+        if best is None or len(name) > len(best):
+            best = name
+    return best
+
+
 def _last_active_month_by_item(session, item_ids) -> dict[int, date]:
     """Most recent PAST month each item genuinely sold, for the Forecast
     page's "latest selling on top" default ordering. Prefers real `Actual`
@@ -612,6 +645,7 @@ def item_detail(session, item_id: int) -> dict | None:
     weekly = disaggregate_forecast(near_term) if near_term else []
 
     return {"item": {"id": item.id, "name": item.canonical_name,
+                     "product_name": sap_product_name(session, item),
                      "category": item.category, "tier": item.tier,
                      "lifecycle": item.lifecycle, "moq": item.moq,
                      "lead_time_days": item.lead_time_days,

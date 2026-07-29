@@ -466,17 +466,55 @@ def _norm_for_crosswalk(s) -> str:
     return text.strip()
 
 
-def build_normalized_alias_index(session) -> dict[str, Item]:
+class AliasIndex(dict):
+    """The normalized-alias index (a plain {normalized_alias: item} dict, so
+    every existing caller and resolve_normalized() are unaffected) carrying
+    two EXACT-match indexes alongside it:
+
+      .exact_by_source  {(alias, source_system): item}
+      .exact_any        {alias: item}
+
+    Both are populated in the same single pass over ItemAlias with the same
+    lowest-id-wins rule resolve() applies via .order_by(ItemAlias.id.asc()),
+    so resolve_any() can answer from memory instead of issuing SQL per name.
+
+    Why this exists (2026-07-28): resolve() ran 1-2 queries per call and
+    then touched row.item, a lazy relationship load — a THIRD query. At
+    80,494 resolve_any() calls per build that was ~160k round-trips and
+    ~12% of total build time, all to re-read a 9k-row table that is already
+    fully loaded here."""
+
+    __slots__ = ("exact_by_source", "exact_any")
+
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self.exact_by_source: dict[tuple[str, str], Item] = {}
+        self.exact_any: dict[str, Item] = {}
+
+
+def build_normalized_alias_index(session) -> AliasIndex:
     """{normalized_alias: item} — first (lowest ItemAlias.id, matching
     resolve()'s own deterministic tie-break) wins a collision. Built once
     per caller rather than per-row: normalizing 9k+ aliases per blank-あだ名
-    row would be wasteful."""
-    index: dict[str, Item] = {}
-    rows = (session.query(ItemAlias).order_by(ItemAlias.id.asc()).all())
+    row would be wasteful.
+
+    Also carries exact-match indexes for resolve_any — see AliasIndex."""
+    index = AliasIndex()
+    # joinedload: without it, row.item below fires one lazy SELECT per alias
+    # row (9k queries just to build the index).
+    from sqlalchemy.orm import joinedload
+    rows = (session.query(ItemAlias).options(joinedload(ItemAlias.item))
+            .order_by(ItemAlias.id.asc()).all())
     for row in rows:
         key = _norm_for_crosswalk(row.alias)
         if key and key not in index:
             index[key] = row.item
+        # same lowest-id-wins tie-break as resolve(): first writer keeps it
+        src_key = (row.alias, row.source_system)
+        if src_key not in index.exact_by_source:
+            index.exact_by_source[src_key] = row.item
+        if row.alias not in index.exact_any:
+            index.exact_any[row.alias] = row.item
     return index
 
 
@@ -507,5 +545,19 @@ def resolve_any(session, norm_index: dict[str, Item], name: str,
     prefer_source: passed straight through to resolve() — see its
     docstring. Pass this whenever the caller's own field already carries a
     known identity type (SAP SYOCODE, a 部品詳細 sheet's 綽名 column, etc.)."""
-    item = resolve(session, name, prefer_source=prefer_source)
+    # Fast path: answer the exact-match step from the in-memory index built
+    # by build_normalized_alias_index (see AliasIndex). Identical semantics
+    # to resolve() — preferred source first, then source-agnostic, both
+    # lowest-ItemAlias.id-wins. Falls back to the querying resolve() when a
+    # caller passed a plain dict (older/ad-hoc call sites) so behaviour is
+    # unchanged for them.
+    exact_by_source = getattr(norm_index, "exact_by_source", None)
+    if exact_by_source is not None:
+        item = None
+        if prefer_source is not None:
+            item = exact_by_source.get((name, prefer_source))
+        if item is None:
+            item = norm_index.exact_any.get(name)
+    else:
+        item = resolve(session, name, prefer_source=prefer_source)
     return item if item is not None else resolve_normalized(norm_index, name)

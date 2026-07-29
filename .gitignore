@@ -45,3 +45,13 @@ app/frontend/.env.production
 # deploy/ TLS output, if ever generated inside the repo checkout instead of
 # /etc/onefcst/tls (see deploy/generate-self-signed-cert.sh)
 deploy/tls/
+
+# pre-rebuild DB backups (rebuild_preserving.backup_db) — ~32MB each
+app/data/backups/
+# runtime maintenance-mode switch (onefcst.maintenance)
+app/data/maintenance.json
+
+# NOTE: Help-page demo videos (app/frontend/public/help/*.mp4, *.webm) are
+# deliberately NOT ignored — the training video ships inside the system so
+# the team can only watch it by playing it in the portal, rather than it
+# circulating as a loose file. See app/frontend/public/help/README.md

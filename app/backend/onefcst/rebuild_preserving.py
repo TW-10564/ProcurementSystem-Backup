@@ -83,6 +83,10 @@ plain carry-over like everything else here. Two things collide:
 from __future__ import annotations
 
 import json
+import os
+import sqlite3
+from datetime import datetime
+from pathlib import Path
 
 from . import build as build_mod
 from . import nas_sync
@@ -90,6 +94,82 @@ from .db import get_session
 from .models import (Item, ForecastRun, Forecast, Adjustment, AccuracyScore,
                      PlannerSnapshot, CompatRule, AuditLog, Actual, WeeklyActual,
                      Suggestion, OrderAction, StockState)
+
+
+def backup_db() -> dict:
+    """Copy the whole DB to app/data/backups/ BEFORE build.run() drops every
+    table. Returns a result dict for the rebuild report; raises only if a
+    backup was possible but failed (see below).
+
+    Why this exists: run() below snapshots the irreplaceable human data
+    (confirmed compat rules, adjustments, order actions, the audit log,
+    accuracy history) into a PYTHON DICT IN MEMORY, then drops all tables,
+    rebuilds, and writes it back. If the process dies anywhere between the
+    drop and the restore — kill, OOM, machine sleep, container eviction —
+    that data is gone permanently: it exists in no other place. The
+    concurrency guard in api/main.py stops two rebuilds from overlapping,
+    but nothing protected against an interrupted one.
+
+    Uses sqlite3's native backup API rather than shutil.copy: it takes a
+    proper read lock and produces a consistent file even if another
+    connection is mid-write, which a byte copy does not guarantee.
+
+    A FAILED backup aborts the rebuild (raises). That is deliberate — the
+    entire point is to not destroy data we cannot recreate, so "couldn't
+    protect it" must not silently proceed to the drop. A full disk becomes
+    a loud, fixable error instead of silent loss.
+
+    Non-SQLite deployments return status="skipped": pg_dump/PITR is the
+    operator's job there and this function must not pretend to cover it.
+    """
+    from .config import DATABASE_URL, DB_PATH
+
+    if DATABASE_URL and not DATABASE_URL.startswith("sqlite"):
+        return {"status": "skipped",
+                "reason": "non-SQLite database — use pg_dump/PITR instead"}
+
+    src = Path(DB_PATH)
+    if not src.exists():
+        # first-ever build: nothing to lose yet
+        return {"status": "skipped", "reason": "no existing database file"}
+
+    backup_dir = src.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = backup_dir / f"{src.stem}-{stamp}.db"
+
+    con = dst = None
+    try:
+        con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        dst = sqlite3.connect(str(dest))
+        con.backup(dst)
+    except Exception as e:
+        for c in (dst, con):
+            if c is not None:
+                c.close()
+        dest.unlink(missing_ok=True)          # never leave a truncated backup
+        raise RuntimeError(
+            f"pre-rebuild backup failed ({e!r}) — rebuild aborted so the "
+            f"existing data is not dropped without a copy") from e
+    finally:
+        for c in (dst, con):
+            if c is not None:
+                c.close()
+
+    # Retention: the DB is ~31MB, so keep a bounded number of generations
+    # rather than growing without limit on a weekly schedule.
+    keep = int(os.environ.get("ONEFCST_DB_BACKUP_KEEP", "7"))
+    existing = sorted(backup_dir.glob(f"{src.stem}-*.db"))
+    pruned = []
+    for old in existing[:-keep] if keep > 0 else []:
+        try:
+            old.unlink()
+            pruned.append(old.name)
+        except OSError:
+            pass                               # pruning is best-effort
+
+    return {"status": "ok", "path": str(dest), "bytes": dest.stat().st_size,
+            "kept": keep, "pruned": len(pruned)}
 
 
 def _snapshot(session) -> dict:
@@ -404,6 +484,12 @@ def run() -> dict:
     build proceeds against whatever's already cached locally, and
     build.py's own _check_required_sources() is the real safety net if
     that's not enough."""
+    # FIRST, before anything can drop a table: the in-memory snapshot below
+    # is the only other copy of the human data, so a crash between the drop
+    # and the restore would otherwise lose it permanently. Raises (aborting
+    # the rebuild) if a backup was possible but failed — see backup_db().
+    db_backup = backup_db()
+
     nas_refresh = nas_sync.refresh_from_nas()
 
     session = get_session()
@@ -414,6 +500,7 @@ def run() -> dict:
 
     build_report = build_mod.run()
     build_report["nas_refresh"] = nas_refresh
+    build_report["db_backup"] = db_backup
 
     session = get_session()
     try:

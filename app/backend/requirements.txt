@@ -16,3 +16,13 @@ psycopg[binary]==3.2.3
 #   sudo apt-get install -y mdbtools
 # Falls back to the xlsx-glob source (SAP_STOCK_GLOB) if mdbtools/the accdb
 # is unavailable, so this is a soft dependency, not a hard requirement.
+
+# Rust-based xlsx/xlsb reader used by ingestion/excel.py for VALUE reads.
+# openpyxl parses the full style table before yielding a value and the ONE
+# workbooks carry ~1M named styles, making that ~61% of a full build; calamine
+# ignores formatting entirely (measured 10.3x faster across all 14 parsers,
+# byte-identical output). openpyxl is still required — it remains the fallback
+# and the only reader that can return FORMULA STRINGS (plan1_chain's chain
+# check, read_xlsx_rows(data_only=False)) and cell STYLES (no_reorder_flag's
+# gray-cell scan).
+python-calamine

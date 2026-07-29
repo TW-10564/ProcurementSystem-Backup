@@ -35,7 +35,22 @@ const http = axios.create({
   headers: API_KEY ? { "X-API-Key": API_KEY } : undefined,
 });
 
+export interface MaintenanceState {
+  enabled: boolean;
+  message: string;
+  since: string | null;
+  by: string | null;
+}
+
 export const api = {
+  // Public endpoint (auth-exempt server-side): it must answer even when the
+  // DB is locked mid-rebuild or the shared key has rotated, since that is
+  // exactly when users need to be told what is going on.
+  maintenance: () => http.get<MaintenanceState>("/maintenance").then((r) => r.data),
+
+  setMaintenance: (enabled: boolean, message: string) =>
+    http.post<MaintenanceState>("/maintenance", { enabled, message }).then((r) => r.data),
+
   compatRules: (params?: { status?: string; min_confidence?: number }) =>
     http.get<CompatRule[]>("/compat-rules", { params }).then((r) => r.data),
 

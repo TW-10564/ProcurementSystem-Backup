@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from .config import ONE_MASTER, NOTE_ONE_MASTER, planning_file
+from .config import ONE_MASTER, NOTE_ONE_MASTER, planning_file, TIER1_CATEGORIES
 from .db import init_db, get_session, engine
 from .models import (Base, Snapshot, PlanValue, StockState, Actual, WeeklyActual,
                      Item, ItemAlias)
@@ -318,8 +318,19 @@ def run() -> dict:
             if resolve_any(session, norm_index, adana,
                            prefer_source="ONE綽名") is not None:
                 continue
+            # tier MUST be derived from the category, never hardcoded: a
+            # subfile-only SKU in the CPU/VGA/MB/Case files is a Tier-1 part
+            # that happens to be missing from the master registry, not a
+            # Tier-2 one. Hardcoding tier=2 here (as this path originally did)
+            # put 'Ry55500GT MPK' — a CPU — in tier 2, where it disagreed with
+            # every code path that keys off category instead of tier
+            # (tier2_forecasting counts it toward Tier-1 demand while the
+            # Forecast page's tier filter lists it under purchasing). Same
+            # mistake registry/build.py's recovery path was fixed for; see
+            # tests/test_category_recovery.py for the invariant.
             new_item = Item(canonical_name=adana, kind="part", category=cat,
-                            subcategory="subfile-only", tier=2)
+                            subcategory="subfile-only",
+                            tier=1 if cat in TIER1_CATEGORIES else 2)
             session.add(new_item)
             session.flush()
             session.add(ItemAlias(item_id=new_item.id, alias=adana,

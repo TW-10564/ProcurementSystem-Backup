@@ -381,6 +381,12 @@ export default function Forecast() {
   const [rebuildError, setRebuildError] = useState<string | null>(null);
   const [rebuildHistory, setRebuildHistory] = useState<RebuildHistoryEntry[]>([]);
   const [showRebuildHistory, setShowRebuildHistory] = useState(false);
+  // Progress bar state. started_at comes from the SERVER, not from the click:
+  // a rebuild triggered in another browser (or by the scheduler) must show
+  // its real elapsed time when this page attaches to it mid-run, not restart
+  // the clock at zero. `now` ticks once a second only while a rebuild runs.
+  const [rebuildStartedAt, setRebuildStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [planVsActual, setPlanVsActual] = useState<PlanVsActual | null>(null);
@@ -428,11 +434,16 @@ export default function Forecast() {
         const s = await api.rebuildStatus();
         failures = 0;
         if (s.status === "running") {
+          // Backend stamps started_at with datetime.utcnow().isoformat() —
+          // no timezone suffix — so it must be read as UTC explicitly, the
+          // same "+ Z" the history table below already does.
+          if (s.started_at) setRebuildStartedAt(new Date(s.started_at + "Z").getTime());
           rebuildTimer.current = window.setTimeout(tick, 3000);
           return;
         }
         rebuildPolling.current = false;
         setRebuilding(false);
+        setRebuildStartedAt(null);
         api.rebuildHistory(10).then(setRebuildHistory).catch(() => {});
         if (s.status === "done") {
           const ship = s.report?.sap_shipments;
@@ -461,10 +472,42 @@ export default function Forecast() {
         }
         rebuildPolling.current = false;
         setRebuilding(false);
+        setRebuildStartedAt(null);
         setRebuildError(String((e as Error).message ?? e));
       }
     };
     tick();
+  };
+
+  // 1 Hz clock, alive ONLY while a rebuild is running — no idle re-render.
+  useEffect(() => {
+    if (!rebuilding) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [rebuilding]);
+
+  // Expected duration, learned from this deployment's own past rebuilds
+  // (median of completed ones) rather than hard-coded: NAS speed and source
+  // size differ per site. Falls back to 7 min, the observed local figure.
+  const rebuildEstimateMs = useMemo(() => {
+    const durations = rebuildHistory
+      .filter((h) => h.status === "done" && h.started_at && h.finished_at)
+      .map((h) => new Date(h.finished_at! + "Z").getTime() - new Date(h.started_at + "Z").getTime())
+      .filter((d) => d > 5000)
+      .sort((a, b) => a - b);
+    if (!durations.length) return 7 * 60_000;
+    return durations[Math.floor(durations.length / 2)];
+  }, [rebuildHistory]);
+
+  const rebuildElapsedMs = rebuildStartedAt ? Math.max(0, now - rebuildStartedAt) : 0;
+  // Deliberately capped at 95%: the bar must never sit at 100% while work is
+  // still going — that reads as "hung". It completes only when the poll says
+  // the rebuild finished, at which point the success banner replaces it.
+  const rebuildPct = Math.min(95, (rebuildElapsedMs / rebuildEstimateMs) * 95);
+  const fmtDuration = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   };
 
   useEffect(() => {
@@ -683,19 +726,55 @@ export default function Forecast() {
             </button>
           </div>
         </div>
+        {rebuilding && (
+          <div className="banner info rebuild-progress">
+            <span aria-hidden>⏳</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+                <strong>{t("fc_rebuild_progress_title")}</strong>
+                <span className="mono dim" style={{ fontSize: "0.76rem", flexShrink: 0 }}>
+                  {rebuildStartedAt
+                    ? `${fmtDuration(rebuildElapsedMs)} / ~${fmtDuration(rebuildEstimateMs)}`
+                    : t("fc_rebuild_progress_starting")}
+                </span>
+              </div>
+              <div
+                className="rebuild-bar"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(rebuildPct)}
+              >
+                <i style={{ width: `${rebuildStartedAt ? rebuildPct : 8}%` }} />
+              </div>
+              <div className="dim" style={{ fontSize: "0.74rem", marginTop: 5 }}>
+                {t("fc_rebuild_progress_hint")}
+              </div>
+            </div>
+          </div>
+        )}
         {rebuildFlash && <div className="banner info">✅ {rebuildFlash}</div>}
         {rebuildError && <div className="banner warn">⚠️ {t("fc_rebuild_error_prefix")}: {rebuildError}</div>}
         {rebuildHistory.length > 0 && (
-          <div style={{ marginTop: 6 }}>
+          <div className="rebuild-history">
+            {/* A disclosure control, not a primary action — .btn made it
+                compete visually with "Rebuild from NAS" right above it. */}
             <button
-              className="btn"
-              style={{ padding: "2px 8px", fontSize: "0.72rem" }}
+              type="button"
+              className="rebuild-history-toggle"
+              aria-expanded={showRebuildHistory}
               onClick={() => setShowRebuildHistory((v) => !v)}
             >
+              <span className="chev" aria-hidden>{showRebuildHistory ? "▾" : "▸"}</span>
               {showRebuildHistory ? t("fc_rebuild_history_hide") : t("fc_rebuild_history_show")}
+              <span className="count">{rebuildHistory.length}</span>
             </button>
             {showRebuildHistory && (
-              <div className="tablewrap" style={{ maxHeight: 220, marginTop: 6 }}>
+              /* Own light surface: this sits on the dark page header, and the
+                 global `tbody td:first-child` sticky column paints an opaque
+                 var(--card) background — on the dark header that rendered as
+                 white text on a white block, i.e. an invisible Trigger column. */
+              <div className="tablewrap rebuild-history-table" style={{ maxHeight: 220 }}>
                 <table>
                   <thead>
                     <tr>
@@ -709,7 +788,11 @@ export default function Forecast() {
                     {rebuildHistory.map((h) => (
                       <tr key={h.id}>
                         <td>
-                          {h.trigger === "manual" ? t("fc_rebuild_history_manual") : t("fc_rebuild_history_scheduled")}
+                          <span className={`trigger-chip ${h.trigger === "manual" ? "manual" : "auto"}`}>
+                            {h.trigger === "manual"
+                              ? t("fc_rebuild_history_manual")
+                              : t("fc_rebuild_history_scheduled")}
+                          </span>
                         </td>
                         <td className="dim mono" style={{ fontSize: "0.78rem" }}>
                           {new Date(h.started_at + "Z").toLocaleString(lang === "ja" ? "ja-JP" : "en-US")}
@@ -1195,6 +1278,20 @@ export default function Forecast() {
                   <DiscontinuingBadge label={t("fc_discontinuing_badge")} />
                 )}
               </h3>
+              {/* The title above is the 綽名 (nickname), which is often opaque
+                  on its own — "RX7600" doesn't say which board, "M02" says
+                  nothing. SAP's full product description goes right under it. */}
+              {detail.item.product_name && (
+                <div
+                  style={{
+                    fontSize: "0.82rem", fontWeight: 600, color: "var(--ink)",
+                    opacity: 0.72, margin: "2px 0 4px",
+                  }}
+                  title={t("fc_detail_product_name_tooltip")}
+                >
+                  {detail.item.product_name}
+                </div>
+              )}
               <div className="desc">
                 {detail.item.category} ・ {methodLabel(detail.method)}
                 {detail.item.moq ? ` ・ ${t("fc_moq")}: ${fmtQty(detail.item.moq)}` : ""}
@@ -1245,37 +1342,12 @@ export default function Forecast() {
               </div>
             )}
 
-            {detail.weekly.length > 0 && (
-              <>
-                <SectionLabel>{lang === "ja" ? "週次" : "Weekly"}</SectionLabel>
-                <div className="card" style={{ margin: "0 0 4px", background: "var(--indigo-bg, rgba(37,99,235,0.06))" }}>
-                  <div style={{ padding: "12px 16px 4px", fontWeight: 700, fontSize: "0.9rem" }}>
-                    {t("fc_weekly_title")}
-                  </div>
-                  <div className="dim" style={{ fontSize: "0.78rem", padding: "0 16px 10px" }}>
-                    {t("fc_weekly_desc")}
-                  </div>
-                  <div className="tablewrap" style={{ maxHeight: 200, padding: "0 4px 8px" }}>
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>{t("fc_weekly_th_week")}</th>
-                          <th className="num">{t("fc_weekly_th_qty")}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {detail.weekly.map((w) => (
-                          <tr key={w.week_start}>
-                            <td className="mono">{fmtMonth(w.week_start, lang)} ({w.week_start.slice(8, 10)})</td>
-                            <td className="num mono">{fmtQty(w.qty)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </>
-            )}
+            {/* The standalone "Weekly breakdown (next 3 months)" table was
+                removed 2026-07-29: its numbers are the same week-split that
+                Planned-vs-Actual below already shows in its Planned column,
+                only without the actuals to compare against. One weekly table
+                per SKU, not two. `detail.weekly` is still served by the API
+                and is what the Planned column is built from. */}
 
             {planVsActual && planVsActual.weeks.length > 0 && (
               <>
@@ -1546,14 +1618,32 @@ export default function Forecast() {
         ) : (
           <>
             <div className="tablewrap" style={{ maxHeight: 520 }}>
-              <table>
+              <table className="fit-table">
+                {/* Fixed column shares so all 14 columns fit the card width —
+                    no scrolling right to reach month 6 / total / order, and
+                    the six month buckets stay identically sized. Sums to 100. */}
+                <colgroup>
+                  <col style={{ width: "13%" }} /> {/* item            */}
+                  <col style={{ width: "7%" }} />   {/* category        */}
+                  <col style={{ width: "7%" }} />   {/* tier            */}
+                  <col style={{ width: "9%" }} />   {/* method + active */}
+                  <col style={{ width: "6%" }} />  {/* wape            */}
+                  <col style={{ width: "6.5%" }} />{/* stock           */}
+                  {monthCols.map((m) => (
+                    <col key={m} style={{ width: `${36 / Math.max(1, monthCols.length)}%` }} />
+                  ))}
+                  <col style={{ width: "6.5%" }} />{/* total6          */}
+                  <col style={{ width: "9%" }} />  {/* order           */}
+                </colgroup>
                 <thead>
                   <tr>
                     <th>{t("fc_th_item")}</th>
                     <th>{t("fc_th_category")}</th>
                     <th>{t("fc_th_tier")}</th>
-                    <th>{t("fc_th_method")}</th>
-                    <th>{t("fc_th_last_active")}</th>
+                    <th>
+                      {t("fc_th_method")}
+                      <span className="sub">{t("fc_th_last_active")}</span>
+                    </th>
                     <th className="num">{t("fc_th_wape")}</th>
                     <th className="num">{t("fc_th_stock")}</th>
                     {monthCols.map((m) => (
@@ -1576,7 +1666,7 @@ export default function Forecast() {
                       onClick={() => openDetail(r.item_id)}
                       style={{ cursor: "pointer" }}
                     >
-                      <td style={{ fontWeight: 600 }}>
+                      <td style={{ fontWeight: 600 }} title={r.name}>
                         {r.name}
                         {r.has_adjustment && (
                           <span
@@ -1588,15 +1678,22 @@ export default function Forecast() {
                         )}
                         {discontinuing && <DiscontinuingBadge label={t("fc_discontinuing_badge")} />}
                       </td>
-                      <td className="dim">{r.category ?? "—"}</td>
+                      <td className="dim" title={r.category ?? undefined}>{r.category ?? "—"}</td>
                       <td>
-                        <span className={"order-action-badge" + (r.tier === 1 ? " awaiting" : "")}>
-                          {r.tier === 1 ? t("fc_tier_filter_1") : r.tier === 2 ? t("fc_tier_filter_2") : "—"}
+                        <span
+                          className={"order-action-badge" + (r.tier === 1 ? " awaiting" : "")}
+                          title={r.tier === 1 ? t("fc_tier_filter_1") : r.tier === 2 ? t("fc_tier_filter_2") : undefined}
+                        >
+                          {r.tier === 1 ? t("fc_tier_badge_1") : r.tier === 2 ? t("fc_tier_badge_2") : "—"}
                         </span>
                       </td>
-                      <td className="dim">{methodLabel(r.method)}</td>
-                      <td className="dim">
-                        {r.last_active_month ? fmtMonth(r.last_active_month, lang) : "—"}
+                      {/* method + last-active share one column so the row fits;
+                          the month is the dim second line. */}
+                      <td className="dim stacked" title={methodLabel(r.method)}>
+                        {methodLabel(r.method)}
+                        <span className="sub">
+                          {r.last_active_month ? fmtMonth(r.last_active_month, lang) : "—"}
+                        </span>
                       </td>
                       <td className="num mono dim"
                           title={r.wape_full_horizon !== null
@@ -1619,13 +1716,19 @@ export default function Forecast() {
                       >
                         {r.next6_total.toLocaleString()}
                       </td>
-                      <td>
+                      {/* qty over order-by month rather than one long inline
+                          phrase — keeps the column narrow enough to fit. */}
+                      <td className="stacked">
                         {r.order ? (
-                          <span style={{ color: "var(--amber)", fontWeight: 600 }}>
-                            {t("fc_order_badge", {
+                          <span
+                            style={{ display: "block", color: "var(--amber)", fontWeight: 700 }}
+                            title={t("fc_order_badge", {
                               qty: fmtQty(r.order.qty),
                               month: fmtMonth(r.order.order_by, lang),
                             })}
+                          >
+                            {fmtQty(r.order.qty)}
+                            <span className="sub">{fmtMonth(r.order.order_by, lang)}</span>
                           </span>
                         ) : (
                           <span className="dim">—</span>

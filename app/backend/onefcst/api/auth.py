@@ -24,7 +24,12 @@ from ..config import API_KEY
 async def require_api_key(request: Request, x_api_key: str | None = Header(default=None)):
     if not API_KEY:                      # auth disabled — the dev default
         return
-    if request.url.path == "/health":
+    # /maintenance (read) is exempt for the same reason as /health: the
+    # frontend must be able to learn "we are down for maintenance" even
+    # if the key is wrong/rotated, otherwise users get a bare 401 instead
+    # of the explanation. Writing it still requires the key (see main.py).
+    if request.url.path == "/health" or (
+            request.url.path == "/maintenance" and request.method == "GET"):
         return
     # compare as bytes: compare_digest(str, str) raises TypeError (→ 500,
     # not 401) if either side contains non-ASCII characters

@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
+import MaintenanceGate from "./components/MaintenanceGate";
 import Landing from "./pages/Landing";
 import Dashboard from "./pages/Dashboard";
 import Forecast from "./pages/Forecast";
@@ -9,10 +10,14 @@ import CompatReview from "./pages/CompatReview";
 import Adjustments from "./pages/Adjustments";
 import Notifications from "./pages/Notifications";
 import Discontinuation from "./pages/Discontinuation";
+import Help from "./pages/Help";
 
 function App() {
   return (
     <BrowserRouter>
+      {/* wraps every route, landing page included, so the notice is
+          site-wide rather than per-page */}
+      <MaintenanceGate>
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/app" element={<Layout />}>
@@ -24,6 +29,7 @@ function App() {
           <Route path="discontinuation" element={<Discontinuation />} />
           <Route path="adjustments" element={<Adjustments />} />
           <Route path="notifications" element={<Notifications />} />
+          <Route path="help" element={<Help />} />
         </Route>
 
         {/* pre-2026-07-21 bookmarks pointed at these top-level paths directly
@@ -37,6 +43,7 @@ function App() {
         <Route path="/notifications" element={<Navigate to="/app/notifications" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </MaintenanceGate>
     </BrowserRouter>
   );
 }

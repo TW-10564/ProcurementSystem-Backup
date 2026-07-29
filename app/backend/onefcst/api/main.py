@@ -115,6 +115,27 @@ async def trigger_rebuild():
     return {"status": "started"}
 
 
+@app.get("/maintenance")
+def get_maintenance():
+    """Public by design (see auth.py): every browser polls this, and it must
+    answer even when the DB is locked mid-rebuild or the key has rotated."""
+    from .. import maintenance
+    return maintenance.get_state()
+
+
+@app.post("/maintenance")
+def set_maintenance(body: dict):
+    """Toggle the site-wide notice. Requires the API key like every other
+    write. Takes effect on every client within one poll (~20s), no restart."""
+    from .. import maintenance
+    state = maintenance.set_state(
+        bool(body.get("enabled")),
+        str(body.get("message") or ""),
+        by=str(body.get("by") or "portal"),
+    )
+    return state
+
+
 @app.get("/build/rebuild/status")
 def get_rebuild_status():
     return rebuild_status_mod.current() or {"status": "idle", "trigger": None,
@@ -373,8 +394,15 @@ def run_forecast(horizon: int = 6, session: Session = Depends(db)):
 
 @app.get("/forecasts/summary")
 def forecast_summary(session: Session = Depends(db)):
+    # Cached on the same DB-mtime key as the reports below. This is the
+    # dashboard's landing call — every page mount and every open tab asks for
+    # it — and recomputing it costs seconds. Uncached, several clients polling
+    # at once serialised behind one worker and pushed the response past 100s
+    # (measured 2026-07-28 with two browsers open), which the frontend
+    # surfaces as an empty page. A rebuild or a new forecast run changes the
+    # DB mtime, so the cache invalidates itself exactly when the numbers move.
     from .. import forecast_views
-    return forecast_views.summary(session)
+    return _cached("forecasts-summary", lambda: forecast_views.summary(session))
 
 
 @app.get("/forecasts")
