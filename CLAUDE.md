@@ -55,7 +55,10 @@ cd app/backend && ONEFCST_TEST_DATABASE_URL=postgresql+psycopg://… python3 -m 
 ```
 
 `.github/workflows/ci.yml` runs exactly that on both dialects (plus
-`npm run build` and a `docker build`) on every push/PR. It runs on a bare
+`npm run build` and a `docker build`) on every push/PR. `deploy.yml` then
+deploys to the DGX from a self-hosted runner once CI is green on `main` —
+runbook in `deploy/README-cd.md`; never give that workflow a `pull_request`
+trigger, since it executes on our own hardware. It runs on a bare
 checkout, so the 27 tests needing NAS-built data skip — a green run is
 **329 passed / 27 skipped**. The skip guard is `tests/realdata.py`
 (`HAS_BUILT_DB`), which asks the database whether `items` has rows; do not

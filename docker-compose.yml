@@ -51,6 +51,10 @@ services:
         VITE_API_BASE: ${VITE_API_BASE:-/api}
         # baked into the JS bundle at build time — see Dockerfile
         VITE_API_KEY: ${ONEFCST_API_KEY:-}
+    # Named explicitly rather than derived from the project/directory name, so
+    # the CD workflow can roll back by re-tagging a known image
+    # (.github/workflows/deploy.yml).
+    image: onefcst-app:latest
     restart: unless-stopped
     depends_on:
       db:
@@ -81,7 +85,13 @@ services:
       # The only writable location: SQLite-era data dir, still used for
       # exports, pg_dump backups and maintenance.json (deliberately a FILE
       # so it is readable when the DB is down — see maintenance.py).
-      - ./app/data:/opt/onefcst/app/data
+      #
+      # Overridable, and on the DGX it MUST point outside the repo
+      # (/srv/onefcst/data). CD checks the code out into the runner's
+      # workspace and `actions/checkout` runs `git clean -ffdx` on an existing
+      # clone — with the default relative path that would delete every backup
+      # and export on the first deploy.
+      - ${ONEFCST_DATA_HOST_DIR:-./app/data}:/opt/onefcst/app/data
 
       # NAS, mounted read-only on the HOST by a systemd .mount unit and
       # passed straight through. Read-only at BOTH layers enforces the
@@ -89,8 +99,9 @@ services:
       - ${NAS_ONE_DIR:-/mnt/nas/one}:/mnt/nas/one:ro
       - ${NAS_PLANNING_DIR:-/mnt/nas/planning}:/mnt/nas/planning:ro
       # SAP cache is writable: ingestion mirrors the weekly ZM13/ZP21 drops
-      # into subfolders under SAP_DIR.
-      - ./data/sap:/srv/sap
+      # into subfolders under SAP_DIR. Same reasoning as the data dir above —
+      # point it outside the repo on the DGX.
+      - ${SAP_CACHE_HOST_DIR:-./data/sap}:/srv/sap
     ports:
       # loopback only — nginx on the host is the sole public entry point
       - "127.0.0.1:8600:8600"

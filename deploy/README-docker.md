@@ -55,24 +55,38 @@ build will fail claiming files are absent while they are plainly there.
 
 ## 2. Configuration
 
+Put the env file and the writable directories **outside** the checkout, so the
+CD workflow (`deploy/README-cd.md`) can drive compose from a disposable runner
+workspace without deleting them:
+
 ```bash
-cp deploy/compose.env.example .env
+sudo mkdir -p /srv/onefcst/data/backups /srv/onefcst/data/exports /srv/onefcst/sap
+sudo chown -R 10001:10001 /srv/onefcst/data /srv/onefcst/sap   # container's onefcst user
+sudo cp deploy/compose.env.example /srv/onefcst/.env
+sudo chmod 600 /srv/onefcst/.env
 openssl rand -base64 24                  # -> POSTGRES_PASSWORD
 openssl rand -base64 32                  # -> ONEFCST_API_KEY
-$EDITOR .env
+sudo $EDITOR /srv/onefcst/.env           # also set ONEFCST_DATA_HOST_DIR / SAP_CACHE_HOST_DIR
 ```
 
-`.env` is gitignored. `ONEFCST_API_KEY` is **required** — auth is fully open
-when it is empty.
+`ONEFCST_API_KEY` is **required** — auth is fully open when it is empty. For
+purely local work you can still `cp deploy/compose.env.example .env` in the
+repo instead and omit the two `*_HOST_DIR` lines; compose then keeps the
+in-repo defaults.
 
 ## 3. Build and start
 
 ```bash
-docker compose build
-docker compose up -d
-docker compose ps                        # both services must be "healthy"
+export COMPOSE="docker compose --env-file /srv/onefcst/.env -p onefcst"
+$COMPOSE build
+$COMPOSE up -d
+$COMPOSE ps                              # both services must be "healthy"
 curl -s http://127.0.0.1:8600/health
 ```
+
+`-p onefcst` is not optional on the DGX: the project name determines the
+container and volume names, so driving compose from a different directory
+without it creates a **second** stack with an empty `pgdata`.
 
 > Changing `ONEFCST_API_KEY` later needs `docker compose build` again, not
 > just a restart: `VITE_API_KEY` is compiled into the JS bundle.
@@ -132,6 +146,7 @@ reads it. Per-department permissions are follow-on work.
 |---|---|
 | Logs | `docker compose logs -f app` |
 | Manual rebuild | via the UI, or `docker compose exec app python -m onefcst.rebuild_preserving` |
+| Deploy new code | push to `main` — CD does it (`deploy/README-cd.md`); manual equivalent is `docker compose --env-file /srv/onefcst/.env -p onefcst up -d --build` |
 | Maintenance on/off | `docker compose exec app python -m onefcst.maintenance on\|off\|status` |
 | Backups | `app/data/backups/*.dump` — `pg_dump` custom format, keep = `ONEFCST_DB_BACKUP_KEEP` |
 | Restore a backup | `docker compose exec -T db pg_restore -U onefcst -d onefcst --clean < app/data/backups/<file>.dump` |

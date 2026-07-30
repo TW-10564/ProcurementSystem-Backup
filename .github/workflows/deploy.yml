@@ -1,0 +1,204 @@
+name: Deploy (DGX)
+
+# Continuous deployment onto the DGX via a self-hosted runner. Because the
+# runner lives on the target host, a deploy is a local `docker compose build`
+# — nothing is copied over the network, and the container keeps its direct
+# access to the mounted NAS shares and (later) local GPUs.
+#
+# TRIGGER — deliberately `workflow_run` on CI, not `push`. A push-triggered
+# deploy races CI and can put a commit into production that the test suite is
+# about to fail; here nothing reaches the DGX unless CI went green for exactly
+# that SHA. Net effect is still "merge to main and it deploys itself", just a
+# few minutes later. `workflow_dispatch` is the manual override, and takes any
+# ref — which is also the rollback path (dispatch the previous good SHA).
+#
+# SECURITY — a self-hosted runner executes whatever the workflow says on YOUR
+# hardware. Two rules:
+#   * this job must NEVER be triggered by `pull_request`. On a public repo (or
+#     one with outside collaborators) that hands anyone who can open a PR a
+#     shell on the DGX. `ci.yml` runs PRs, and it runs them on GitHub's
+#     ubuntu-latest, not here.
+#   * keep the repository private. GitHub's own guidance is not to use
+#     self-hosted runners on public repositories.
+#
+# One-time DGX setup — runner registration, systemd, the persistent dirs and
+# the env file this expects: deploy/README-cd.md.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA, tag or branch to deploy (default: main)"
+        required: false
+        default: main
+
+# Never two deploys at once: they would fight over the same containers and the
+# same image tag. Queue instead of cancelling — a half-finished deploy that
+# gets cancelled is worse than one that waits.
+concurrency:
+  group: deploy-dgx
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # `dgx` is a custom label added at registration time so this can never be
+    # picked up by some other self-hosted runner.
+    runs-on: [self-hosted, dgx]
+
+    # Skip a CI run that failed, and skip CI runs on other branches. For
+    # workflow_dispatch there is no workflow_run payload, so the second
+    # condition passes it through.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    env:
+      # Everything mutable lives OUTSIDE the checkout: the runner workspace is
+      # disposable (actions/checkout runs `git clean -ffdx`), the data is not.
+      ENV_FILE: /srv/onefcst/.env
+      # Pin the compose project so the stack is the same one regardless of
+      # which directory it is driven from — otherwise a deploy from the runner
+      # workspace would create a SECOND set of containers and a second pgdata
+      # volume, and the site would appear to lose all its data.
+      COMPOSE_PROJECT_NAME: onefcst
+      IMAGE: onefcst-app:latest
+      HEALTH_URL: http://127.0.0.1:8600/health
+
+    steps:
+      - name: Resolve the ref being deployed
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ref=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.ref }}
+
+      # Fail before touching the running site if the host is not set up. Each
+      # of these has a one-line fix in deploy/README-cd.md, and finding out
+      # here costs nothing — finding out halfway through a deploy costs an
+      # outage.
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          test -f "$ENV_FILE" || { echo "::error::missing $ENV_FILE (see deploy/README-cd.md)"; exit 1; }
+          docker info >/dev/null || { echo "::error::runner user cannot talk to docker — add it to the docker group"; exit 1; }
+          # These must be absolute and outside the workspace, or a checkout
+          # will eventually delete the backups.
+          for var in ONEFCST_DATA_HOST_DIR SAP_CACHE_HOST_DIR; do
+            val=$(grep -E "^${var}=" "$ENV_FILE" | cut -d= -f2- | tr -d '"' || true)
+            case "$val" in
+              /*) test -d "$val" || { echo "::error::$var=$val does not exist"; exit 1; } ;;
+              *)  echo "::error::$var must be an absolute path outside the repo (got '${val:-unset}')"; exit 1 ;;
+            esac
+          done
+          grep -q '^ONEFCST_API_KEY=..' "$ENV_FILE" || { echo "::error::ONEFCST_API_KEY not set in $ENV_FILE — auth would be OPEN"; exit 1; }
+
+      # Remember the image currently in service. This is the rollback target,
+      # and it is why compose pins `image: onefcst-app:latest` explicitly.
+      - name: Record the image in service
+        id: prev
+        run: |
+          prev=$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null || true)
+          echo "id=$prev" >> "$GITHUB_OUTPUT"
+          echo "current image: ${prev:-<none, first deploy>}"
+
+      # A deployment is exactly the case maintenance mode exists for (policy in
+      # CLAUDE.md: rebuilds do NOT use it, deployments do). If an operator
+      # already had it on for their own reasons, leave it on at the end.
+      - name: Maintenance mode on
+        id: maint
+        run: |
+          set -uo pipefail
+          was_on=false
+          if docker compose --env-file "$ENV_FILE" exec -T app \
+               python -m onefcst.maintenance status 2>/dev/null | grep -q "maintenance ON"; then
+            was_on=true
+          fi
+          echo "was_on=$was_on" >> "$GITHUB_OUTPUT"
+          if [ "$was_on" = false ]; then
+            # Best-effort: on a first deploy there is no container to exec into
+            # yet, and that is not a reason to abort.
+            docker compose --env-file "$ENV_FILE" exec -T app \
+              python -m onefcst.maintenance on \
+              "新機能をリリース中です。数分後に復旧します。" || \
+              echo "note: could not set maintenance mode (app not running yet?)"
+          fi
+
+      # --build is what makes this a deploy rather than a restart. VITE_API_KEY
+      # is read from $ENV_FILE by compose and compiled into the JS bundle, so
+      # the image MUST be rebuilt for a rotated key to take effect.
+      - name: Build and start
+        run: |
+          set -euo pipefail
+          docker compose --env-file "$ENV_FILE" build --pull app
+          docker compose --env-file "$ENV_FILE" up -d --remove-orphans
+
+      # The container's own HEALTHCHECK only proves uvicorn answers. Check the
+      # SPA too: the frontend is built in a separate Dockerfile stage, and a
+      # failure there yields a perfectly healthy API serving no dashboard.
+      - name: Health check
+        id: health
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 40); do
+            if curl -sf -m 5 "$HEALTH_URL" >/dev/null; then
+              spa=$(curl -s -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1:8600/)
+              if [ "$spa" = "200" ]; then
+                echo "healthy after ${i} attempt(s); SPA 200"
+                exit 0
+              fi
+              echo "::warning::API healthy but SPA returned $spa"
+            fi
+            sleep 3
+          done
+          echo "::error::did not become healthy within ~2 minutes"
+          docker compose --env-file "$ENV_FILE" logs --tail 80 app
+          exit 1
+
+      # Only on failure, and only if there is something to go back to. Leaves
+      # maintenance mode ON deliberately: the site is not serving the new code,
+      # so users should see a notice while you read the logs.
+      - name: Roll back
+        if: failure() && steps.prev.outputs.id != ''
+        run: |
+          set -uo pipefail
+          echo "::warning::rolling back to ${{ steps.prev.outputs.id }}"
+          docker tag "${{ steps.prev.outputs.id }}" "$IMAGE"
+          docker compose --env-file "$ENV_FILE" up -d --no-build
+          for i in $(seq 1 20); do
+            curl -sf -m 5 "$HEALTH_URL" >/dev/null && { echo "rollback healthy"; exit 0; }
+            sleep 3
+          done
+          echo "::error::ROLLBACK ALSO UNHEALTHY — the site is down, needs hands on the DGX"
+          exit 1
+
+      - name: Maintenance mode off
+        if: success() && steps.maint.outputs.was_on == 'false'
+        run: |
+          docker compose --env-file "$ENV_FILE" exec -T app \
+            python -m onefcst.maintenance off
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy ${{ job.status }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Ref | \`${{ steps.target.outputs.ref }}\` |"
+            echo "| Previous image | \`${{ steps.prev.outputs.id }}\` |"
+            echo "| Maintenance was already on | ${{ steps.maint.outputs.was_on }} |"
+            echo ""
+            echo "Schema changes are NOT applied by this workflow — a model"
+            echo "change still needs \`python -m onefcst.rebuild_preserving\`."
+          } >> "$GITHUB_STEP_SUMMARY"
