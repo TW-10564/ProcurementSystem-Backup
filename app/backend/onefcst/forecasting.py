@@ -81,7 +81,8 @@ def _series_by_item(session) -> dict[int, dict[date, float]]:
     """{item_id: {month: value}} of demand history, master-level plan
     values preferred PER MONTH.
 
-    Cross-check against Data Summary.xlsx (2026-07-08) found 20 items —
+    Cross-check against docs/business/Data Summary.xlsx (2026-07-08)
+    found 20 items —
     11 OS licenses (ｿﾌﾄｳｪｱS) plus a handful of others — with ZERO
     master-level history: their consumption only ever appears in the
     one_row level (the 17 ONE 部品詳細 sub-files' own series; see

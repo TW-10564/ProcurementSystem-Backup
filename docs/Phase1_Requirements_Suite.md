@@ -4,7 +4,7 @@
 > **Document status:** Draft for submission
 > **Date:** 2026-06-29
 > **Author:** 【your name / 社員番号】
-> **Companion to:** Phase1_Project_Charter.md
+> **Companion to:** docs/Phase1_Project_Charter.md
 > _Items in 【 】 are placeholders. Requirement IDs are stable for traceability._
 
 ---

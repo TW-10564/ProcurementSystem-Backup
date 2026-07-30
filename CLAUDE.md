@@ -1,5 +1,13 @@
 # ONE Consolidation / Forecasting Portal — Claude Context
 
+## Where things are
+
+Root holds only what must be there (`CLAUDE.md`, `Dockerfile`,
+`docker-compose.yml`, dotfiles). Code in `app/`, deployment in `deploy/`,
+everything written for humans in `docs/` — see `docs/README.md` for the map.
+Current plan of record: `docs/SSO_TO_GOLIVE_TASKS.md`. Security posture and open
+findings: `docs/SECURITY_AUDIT_2026-07-30.md`.
+
 ## What this is
 AI procurement decision-support system for PC parts buying at サードウェーブ.
 

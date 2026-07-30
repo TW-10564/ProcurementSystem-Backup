@@ -33,6 +33,6 @@ deploy/tls/
 **/.mypy_cache
 
 # not needed at runtime
-presentation_materials/
+docs/                     # business docs, diagrams, archived plans
 *.md
 !app/frontend/public/help/README.md
