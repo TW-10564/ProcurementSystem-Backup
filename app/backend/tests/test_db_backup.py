@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from onefcst import maintenance
 from onefcst import rebuild_preserving as rp
 
 
@@ -199,25 +200,33 @@ def _stub_rebuild(monkeypatch, build_fn):
     monkeypatch.setattr(rp.build_mod, "run", build_fn)
 
 
-def test_rebuild_enables_maintenance_during_the_destructive_window(fake_db, monkeypatch, tmp_path):
-    """The drop..restore window serves a half-built database. Users must be
-    told, and on Postgres holding new readers off is also what stops them
-    queueing behind the DROP's ACCESS EXCLUSIVE lock."""
-    monkeypatch.setattr(rp.maintenance, "STATE_PATH", tmp_path / "maintenance.json")
+# Policy, set 2026-07-30: maintenance mode is for DEPLOYMENTS (an operator
+# pushing new code), not for NAS rebuilds. A rebuild is routine — weekly plus
+# any manual click — and a full-screen lock every time overstated it. The
+# frontend shows a non-blocking 「再構築中」 strip from /build/rebuild/status
+# instead, which keeps answering because that state is in-memory.
+#
+# These tests previously asserted the OPPOSITE (rebuild turns maintenance on
+# for the destructive window, off again in `finally`). They are inverted
+# deliberately, not relaxed: the guarantee is now that a rebuild never writes
+# that flag at all, in any outcome.
+def test_rebuild_does_not_put_the_site_into_maintenance(fake_db, monkeypatch, tmp_path):
+    monkeypatch.setattr(maintenance, "STATE_PATH", tmp_path / "maintenance.json")
     seen = {}
     _stub_rebuild(monkeypatch, lambda: (seen.update(
-        during=rp.maintenance.get_state()["enabled"]), {})[1])
+        during=maintenance.get_state()["enabled"]), {})[1])
 
     rp.run()
 
-    assert seen["during"] is True, "maintenance was not on while tables were dropped"
-    assert rp.maintenance.get_state()["enabled"] is False, "left in maintenance mode"
+    assert seen["during"] is False, "a NAS rebuild locked users out of the site"
+    assert maintenance.get_state()["enabled"] is False
 
 
-def test_failed_rebuild_does_not_strand_the_app_in_maintenance_mode(fake_db, monkeypatch, tmp_path):
-    """A crash mid-build must not leave every user locked out until someone
-    notices and clears the flag by hand."""
-    monkeypatch.setattr(rp.maintenance, "STATE_PATH", tmp_path / "maintenance.json")
+def test_failed_rebuild_does_not_put_the_site_into_maintenance(fake_db, monkeypatch, tmp_path):
+    """A crash mid-build must not leave users locked out either — the old
+    code relied on a `finally` to undo its own flip; now there is nothing to
+    undo."""
+    monkeypatch.setattr(maintenance, "STATE_PATH", tmp_path / "maintenance.json")
 
     def boom():
         raise RuntimeError("ingest exploded")
@@ -226,21 +235,20 @@ def test_failed_rebuild_does_not_strand_the_app_in_maintenance_mode(fake_db, mon
 
     with pytest.raises(RuntimeError, match="ingest exploded"):
         rp.run()
-    assert rp.maintenance.get_state()["enabled"] is False
+    assert maintenance.get_state()["enabled"] is False
 
 
-def test_rebuild_leaves_a_pre_existing_maintenance_mode_on(fake_db, monkeypatch, tmp_path):
-    """If an operator put the site into maintenance deliberately, finishing a
-    rebuild must not silently open it back up."""
-    monkeypatch.setattr(rp.maintenance, "STATE_PATH", tmp_path / "maintenance.json")
-    rp.maintenance.set_state(True, "planned outage", by="operator")
+def test_rebuild_leaves_a_pre_existing_maintenance_mode_exactly_as_found(fake_db, monkeypatch, tmp_path):
+    """An operator's deliberate outage (a deployment) must survive a rebuild
+    that happens during it — message and start time included, since the
+    banner reports how long it has been going on."""
+    monkeypatch.setattr(maintenance, "STATE_PATH", tmp_path / "maintenance.json")
+    before = maintenance.set_state(True, "planned outage", by="operator")
     _stub_rebuild(monkeypatch, lambda: {})
 
     rp.run()
 
-    state = rp.maintenance.get_state()
-    assert state["enabled"] is True
-    assert state["message"] == "planned outage"
+    assert maintenance.get_state() == before
 
 
 class _AnyKeys(dict):

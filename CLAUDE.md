@@ -101,6 +101,27 @@ Deployment gotchas that have already bitten:
 - `ONEFCST_NAS_MODE=mount` makes a missing/empty NAS mount an error rather
   than the old silent skip (`nas_sync.py`).
 
+### Maintenance mode is for deployments, not rebuilds
+
+Policy set 2026-07-30, and the two paths must stay separate:
+
+- **Deployment** (you push new code/features) → turn maintenance mode on by
+  hand: `python3 -m onefcst.maintenance on "<message>"`, `… off` after.
+  `MaintenanceGate` shows a full-screen notice. Nothing sets this flag
+  automatically, so "the site is in maintenance" always means a person did it.
+- **NAS rebuild** (weekly scheduler, or the UI button) → **must not** touch
+  maintenance mode. `rebuild_preserving.run()` deliberately no longer reads or
+  writes that flag. Users instead get a non-blocking 「再構築中」 strip driven
+  by `/build/rebuild/status`, which keeps answering while the tables are gone
+  because that state lives in memory, not the DB.
+
+Consequences to keep in mind: data endpoints DO return 500 intermittently
+during the drop→restore window (verified — the strip is what explains it, and
+any 5xx makes the gate re-check at once via `SERVER_ERROR_EVENT`). And on
+Postgres, a long in-flight report query can now block `drop_all` until
+`ONEFCST_DROP_LOCK_TIMEOUT`; that aborts safely with nothing dropped, and the
+remedy is to enable maintenance mode for that rebuild deliberately.
+
 ---
 
 ## Architecture — `app/` (active product)

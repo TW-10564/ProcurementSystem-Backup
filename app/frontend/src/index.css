@@ -1461,3 +1461,18 @@ textarea {
   background: #ffd964;
   border-bottom: 1px solid #e0ba38;
 }
+
+/* A NAS rebuild is routine, not an incident: same strip, cooler colour so it
+   reads as "in progress" rather than the amber "something is wrong". */
+.maint-strip.rebuild-strip {
+  color: #123a5c;
+  background: #cfe6fb;
+  border-bottom-color: #8fc0e6;
+}
+.maint-strip.rebuild-strip.done {
+  color: #14512c;
+  background: #cdeed8;
+  border-bottom-color: #8bcaa2;
+}
+.maint-strip.rebuild-strip .maint-link { color: inherit; }
+.maint-strip.rebuild-strip .maint-link:hover { color: #000; }

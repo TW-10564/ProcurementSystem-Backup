@@ -90,7 +90,6 @@ from datetime import datetime
 from pathlib import Path
 
 from . import build as build_mod
-from . import maintenance
 from . import nas_sync
 from .db import get_session
 from .models import (Item, ForecastRun, Forecast, Adjustment, AccuracyScore,
@@ -583,44 +582,39 @@ def run() -> dict:
     finally:
         session.close()
 
-    # Maintenance mode spans the destructive window. Two reasons, and the
-    # second is the one that matters on PostgreSQL:
-    #   * honesty — between the drop and the restore the API serves a
-    #     half-built database, and users deserve to be told that rather than
-    #     seeing an empty dashboard;
-    #   * lock contention — build.run()'s DROP needs an ACCESS EXCLUSIVE
-    #     lock and PG makes it QUEUE behind any in-flight report session
-    #     instead of failing (see build._drop_all_with_lock_timeout). Not
-    #     admitting new requests first is what stops that queue forming.
-    # Restored in `finally` so an aborted rebuild never strands the app in
-    # maintenance mode. Best-effort: a failure to flip the flag must not
-    # itself abort a rebuild that is otherwise fine.
-    was_on = False
-    try:
-        was_on = bool(maintenance.get_state().get("enabled"))
-        if not was_on:
-            maintenance.set_state(
-                True, "データ再構築中です。完了までしばらくお待ちください。",
-                by="rebuild")
-    except Exception:                          # noqa: BLE001 — advisory only
-        pass
+    # A NAS rebuild deliberately does NOT touch maintenance mode (policy set
+    # 2026-07-30). Maintenance mode is now reserved for DEPLOYMENTS — pushing
+    # new code or features, where the site really is unusable and an operator
+    # decides when it starts and ends. A rebuild is routine (weekly, plus any
+    # manual click) and a full-screen lock every time overstated it: the data
+    # is briefly unavailable, the site is not down.
+    #
+    # What replaces it: rebuild_status is in-memory, so /build/rebuild/status
+    # keeps answering while the tables are gone, and the frontend shows a
+    # non-blocking 「再構築中」 strip driven by it (MaintenanceGate). Users
+    # keep whatever already loaded instead of being thrown out.
+    #
+    # If an operator HAS put the site in maintenance, we leave it exactly as
+    # found — this code no longer reads or writes that flag at all, so there
+    # is no path by which finishing a rebuild opens a deliberate outage back
+    # up.
+    #
+    # Cost of the change, on PostgreSQL only: maintenance mode used to stop
+    # new readers arriving, which kept them from queueing behind the DROP's
+    # ACCESS EXCLUSIVE lock. Without it a long in-flight report session can
+    # still block the drop — that now surfaces as build.py's explicit
+    # "could not drop tables within 15s … the database is intact" abort,
+    # which is a safe failure (nothing dropped) and names maintenance mode as
+    # the remedy. Prefer that over locking everyone out on every rebuild.
+    build_report = build_mod.run()
+    build_report["nas_refresh"] = nas_refresh
+    build_report["db_backup"] = db_backup
 
+    session = get_session()
     try:
-        build_report = build_mod.run()
-        build_report["nas_refresh"] = nas_refresh
-        build_report["db_backup"] = db_backup
-
-        session = get_session()
-        try:
-            dropped, superseded = _restore(session, snap)
-        finally:
-            session.close()
+        dropped, superseded = _restore(session, snap)
     finally:
-        if not was_on:
-            try:
-                maintenance.set_state(False, by="rebuild")
-            except Exception:                  # noqa: BLE001
-                pass
+        session.close()
 
     build_report["history_preserved"] = {
         "runs": len(snap["runs"]), "forecasts": len(snap["forecasts"]),

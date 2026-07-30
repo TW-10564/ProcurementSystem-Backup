@@ -141,12 +141,17 @@ reads it. Per-department permissions are follow-on work.
 - **A failed backup aborts the rebuild.** Deliberate: the human data
   (adjustments, confirmed compat rules, audit log) exists nowhere else. If
   rebuilds start failing, check `pg_dump` and disk space first.
-- **A rebuild sets maintenance mode** for the drop→restore window and clears
-  it in a `finally`. If the app is stuck in maintenance, a rebuild died —
-  check the logs, then `... maintenance off`.
+- **Maintenance mode is for DEPLOYMENTS only** (policy 2026-07-30). Turn it on
+  by hand when you push new code or features; nothing turns it on
+  automatically, and nothing turns it off but you. A NAS rebuild deliberately
+  does **not** use it — users get a non-blocking 「再構築中」 strip driven by
+  `/build/rebuild/status` and keep browsing. So "the site is in maintenance"
+  now always means a person put it there.
 - **`drop_all` aborts after `ONEFCST_DROP_LOCK_TIMEOUT`** (default 15s) if
   another session holds a lock. This is safe — *nothing* is dropped. Retry
-  once the blocking query ends.
+  once the blocking query ends. Since rebuilds no longer close the site
+  first, a long report query CAN now block one on Postgres; if a rebuild
+  keeps losing this race, turn maintenance on for it deliberately.
 - **One uvicorn worker, deliberately.** The scheduler runs per process; a
   second worker would run a second scheduler and two rebuilds could drop the
   database concurrently. Do not add `--workers`.

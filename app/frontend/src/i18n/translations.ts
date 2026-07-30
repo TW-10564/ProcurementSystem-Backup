@@ -335,6 +335,18 @@ export const translations = {
   maint_retry: { ja: "再読み込み", en: "Reload" },
   maint_dismiss: { ja: "閉じて閲覧を続ける（表示が不安定な場合があります）", en: "Continue anyway (the site may behave oddly)" },
   maint_banner: { ja: "メンテナンス中：表示が不安定な場合があります", en: "Maintenance in progress — the site may behave oddly" },
+  // A NAS rebuild is routine and does NOT lock the site (unlike a deployment,
+  // which uses maint_* above): the data is briefly unavailable, the site is
+  // not down. Non-blocking strip only.
+  rebuild_strip: {
+    ja: "データ再構築中です。完了までの数分間、一部の画面が表示できないことがあります。",
+    en: "Rebuilding data — for the next few minutes some screens may not load.",
+  },
+  rebuild_done_strip: {
+    ja: "データ再構築が完了しました。最新の数値を見るには再読み込みしてください。",
+    en: "Data rebuild finished — reload to see the new numbers.",
+  },
+  rebuild_done_reload: { ja: "再読み込み", en: "Reload" },
   fc_rebuild_history_show: { ja: "再取込み履歴を表示", en: "Show rebuild history" },
   fc_rebuild_history_hide: { ja: "再取込み履歴を隠す", en: "Hide rebuild history" },
   fc_rebuild_history_th_trigger: { ja: "実行元", en: "Trigger" },
