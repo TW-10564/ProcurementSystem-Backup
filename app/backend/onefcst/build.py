@@ -17,6 +17,8 @@ from .models import (Base, Snapshot, PlanValue, StockState, Actual, WeeklyActual
                      Item, ItemAlias)
 from .ingestion import (one_master, notepc_forecast, planning4, planning1, subfiles, sap,
                        sap_shipments, sap_stock_history, sap_zp21)
+from .ingestion.name_crosswalk import latest_crosswalk_file, load_crosswalk_tokens, \
+                                     resolve_via_crosswalk
 from .ingestion.sap_shipment_overrides import resolve_shipment_override
 from .ingestion.excel import file_meta
 from .ingestion.subfile_config import FILES as SUBFILE_CFG, BASE as SUBFILE_BASE
@@ -256,6 +258,58 @@ def _drop_all_with_lock_timeout() -> None:
                 f"maintenance mode first. ({e.orig})") from e
 
 
+def _load_crosswalk_tokens_or_empty() -> list:
+    """製品名称読みかえ tokens, or [] when procurement's crosswalk workbook is
+    absent. Optional by design (see ingestion/name_crosswalk.py): a missing
+    crosswalk costs some resolution, it must not fail a build."""
+    path = latest_crosswalk_file()
+    return load_crosswalk_tokens(path) if path else []
+
+
+def _aggregate_zm13(session, norm_index, entry: dict, crosswalk_tokens: list):
+    """Resolve one weekly ZM13 snapshot to items and sum quantities per item.
+
+    Shared by the "current" read and the history backfill so the two cannot
+    drift — they used to be separate loops with DIFFERENT resolution rules,
+    and only the (now removed) accdb path consulted the crosswalk.
+
+    Resolution order, unchanged from ingestion/sap.py's documented stance:
+      1. 品目 (=SYOCODE) as 商品コード — SAP's own code, the primary key
+      2. 品目テキスト as ONE綽名 — the display name
+      3. the 製品名称読みかえ crosswalk, for rows neither of those resolves
+
+    Aggregation happens HERE rather than per raw row because two rows with
+    different name spellings can resolve to the same item.
+    """
+    agg: dict = {}
+    stats = {"matched_via_syocode": 0, "matched_via_adana": 0,
+             "resolved_via_crosswalk": 0, "unnamed": 0}
+    for row in entry["rows"]:
+        item = None
+        if row["code"]:
+            item = resolve_any(session, norm_index, row["code"], prefer_source="商品コード")
+            if item is not None:
+                stats["matched_via_syocode"] += 1
+        if item is None and row["name_text"]:
+            item = resolve_any(session, norm_index, row["name_text"], prefer_source="ONE綽名")
+            if item is not None:
+                stats["matched_via_adana"] += 1
+        if item is None and row["name_text"] and crosswalk_tokens:
+            adana = resolve_via_crosswalk(row["name_text"], crosswalk_tokens)
+            if adana:
+                item = resolve_any(session, norm_index, adana, prefer_source="ONE綽名")
+                if item is not None:
+                    stats["resolved_via_crosswalk"] += 1
+        if item is None:
+            stats["unnamed"] += 1
+        key = item.id if item is not None else ("unresolved", row["code"])
+        e = agg.setdefault(key, {"item": item,
+                                 "raw_name": row["name_text"] or row["code"] or "?",
+                                 "qty": 0.0})
+        e["qty"] += row["qty"]
+    return agg, stats
+
+
 def run() -> dict:
     print(f"=== onefcst M1 build  {datetime.now():%Y-%m-%d %H:%M} ===")
     _check_required_sources()
@@ -421,57 +475,55 @@ def run() -> dict:
           f"subfile-only items registered={subfile_only_created}")
     report["registry"]["subfile_only_items_created"] = subfile_only_created
 
-    # 6. SAP physical stock
-    sap_result = sap.parse_sap_stock()
-    report["sap"] = {"path": str(sap_result["path"]) if sap_result["path"] else None,
-                     "matched": 0, "rows": len(sap_result["rows"]),
-                     "resolved_via_crosswalk": sap_result["resolved_via_crosswalk"]}
-    if sap_result["path"]:
-        # SYOCODE is the primary resolution key (standardized 2026-07-09 —
-        # see ingestion/sap.py docstring): it lines up with 商品コード
-        # ItemAlias rows already in the registry, and resolves more blank-
-        # あだ名 rows than the SYONAME crosswalk alone. あだ名 is the fallback
-        # for rows whose SYOCODE isn't itself a known 商品コード. Aggregation
-        # happens here (by resolved item), not in sap.py, since two raw rows
-        # with different あだ名 spellings can resolve to the same item.
-        agg: dict = {}
-        matched_via_syocode = 0
-        matched_via_adana = 0
-        unnamed = 0
-        for row in sap_result["rows"]:
-            item = None
-            if row["syocode"]:
-                item = resolve_any(session, norm_index, row["syocode"], prefer_source="商品コード")
-                if item is not None:
-                    matched_via_syocode += 1
-            if item is None and row["adana"]:
-                item = resolve_any(session, norm_index, row["adana"], prefer_source="ONE綽名")
-                if item is not None:
-                    matched_via_adana += 1
-            if item is None:
-                unnamed += 1
-            key = item.id if item is not None else ("unresolved", row["adana"] or row["syocode"])
-            entry = agg.setdefault(key, {"item": item,
-                                         "raw_name": row["adana"] or row["syocode"] or "?",
-                                         "qty": 0.0})
-            entry["qty"] += row["qty"]
+    # 6. SAP physical stock — from the WEEKLY ZM13 files (★週頭在庫(ZM13) on
+    # the NAS, mirrored by nas_sync), newest = "current".
+    #
+    # Until 2026-07-30 this read a separate processed source instead
+    # (SAP在庫抽出.accdb via mdb-export, xlsx snapshot as fallback). Measured
+    # on 2026-07-27, the two agreed on 496 of 497 resolved items — the accdb
+    # was a second copy of the same weekly pull, in a second format, needing a
+    # system package (mdbtools) and writing a duplicate StockState row for the
+    # same date. The raw weekly file also resolves MORE rows, because every row
+    # carries 品目 (=SYOCODE) while the processed table left あだ名 blank on
+    # ~200 rows.
+    #
+    # Resolution is shared with the history backfill below (_resolve_zm13_row)
+    # so "current" and "history" cannot drift apart — including the
+    # 製品名称読みかえ crosswalk, which resolves rows SYOCODE alone cannot and
+    # was previously only wired into the accdb path.
+    stock_history = sap_stock_history.parse_all_stock_history()
+    crosswalk_tokens = _load_crosswalk_tokens_or_empty()
+
+    current_entry = stock_history[-1] if stock_history else None
+    history_entries = stock_history[:-1] if stock_history else []
+
+    report["sap"] = {"path": str(current_entry["path"]) if current_entry else None,
+                     "matched": 0,
+                     "rows": len(current_entry["rows"]) if current_entry else 0,
+                     "resolved_via_crosswalk": 0}
+    if current_entry is not None:
+        agg, stats = _aggregate_zm13(session, norm_index, current_entry, crosswalk_tokens)
         matched = 0
         for entry in agg.values():
             item = entry["item"]
             if item is not None:
                 matched += 1
             session.add(StockState(item_id=item.id if item else None, raw_name=entry["raw_name"],
-                                   snapshot_date=sap_result["as_of_date"], sap_qty=entry["qty"]))
-        report["sap"]["matched"] = matched
-        report["sap"]["matched_via_syocode"] = matched_via_syocode
-        report["sap"]["matched_via_adana"] = matched_via_adana
-        report["sap"]["unnamed"] = unnamed
-        print(f"[SAP] file={sap_result['path'].name}  rows={len(sap_result['rows'])}  "
-              f"resolved_items={matched}/{len(agg)} (via SYOCODE={matched_via_syocode}, "
-              f"via あだ名={matched_via_adana})  unnamed_rows={unnamed}  "
-              f"resolved_via_name_crosswalk={sap_result['resolved_via_crosswalk']}")
+                                   snapshot_date=current_entry["as_of_date"], sap_qty=entry["qty"]))
+        report["sap"].update(matched=matched, **stats)
+        report["sap"]["as_of_date"] = str(current_entry["as_of_date"])
+        # ITEMS vs ROWS is called out explicitly: the old history line printed
+        # a row count over an item count ("578/659"), which read as a
+        # resolution rate and was not one — several rows aggregate to one item.
+        print(f"[SAP] file={current_entry['path'].name}  "
+              f"as_of={current_entry['as_of_date']}  rows={len(current_entry['rows'])}  "
+              f"resolved_items={matched}/{len(agg)} items  "
+              f"(rows via SYOCODE={stats['matched_via_syocode']}, "
+              f"via 品目テキスト={stats['matched_via_adana']}, "
+              f"via crosswalk={stats['resolved_via_crosswalk']}, "
+              f"unresolved={stats['unnamed']})")
     else:
-        print("[SAP] no stock file found (glob miss) — skipped, non-blocking for M1")
+        print("[SAP] no weekly ZM13 stock file found — skipped, non-blocking for M1")
 
     # 6b. SAP stock HISTORY backfill — manually-placed weekly raw ZM13
     # exports (ingestion/sap_stock_history.py), distinct from the single
@@ -485,20 +537,13 @@ def run() -> dict:
     # identically to a real weekly SAP refresh once they're in the DB.
     # Preserved across future onefcst.rebuild_preserving runs the same
     # way WeeklyActual is (see rebuild_preserving.py).
-    stock_history = sap_stock_history.parse_all_stock_history()
-    report["sap_stock_history"] = {"snapshots": len(stock_history), "matched": {}, "total_items": {}}
-    for entry in stock_history:
-        agg: dict = {}
-        matched = 0
-        for row in entry["rows"]:
-            item = resolve_any(session, norm_index, row["code"], prefer_source="商品コード")
-            if item is None and row["name_text"]:
-                item = resolve_any(session, norm_index, row["name_text"], prefer_source="ONE綽名")
-            if item is not None:
-                matched += 1
-            key = item.id if item is not None else ("unresolved", row["code"])
-            e = agg.setdefault(key, {"item": item, "raw_name": row["name_text"] or row["code"], "qty": 0.0})
-            e["qty"] += row["qty"]
+    # Parsed once in step 6 above; the newest entry is already written there as
+    # "current", so only the OLDER weeks are backfilled here.
+    report["sap_stock_history"] = {"snapshots": len(history_entries),
+                                   "matched": {}, "total_items": {}}
+    for entry in history_entries:
+        agg, _stats = _aggregate_zm13(session, norm_index, entry, crosswalk_tokens)
+        matched = sum(1 for e in agg.values() if e["item"] is not None)
         for e in agg.values():
             item = e["item"]
             session.add(StockState(item_id=item.id if item else None, raw_name=e["raw_name"],
@@ -506,7 +551,7 @@ def run() -> dict:
         report["sap_stock_history"]["matched"][str(entry["as_of_date"])] = matched
         report["sap_stock_history"]["total_items"][str(entry["as_of_date"])] = len(agg)
         print(f"[SAP stock history] {entry['path'].name}  as_of={entry['as_of_date']}  "
-              f"resolved_items={matched}/{len(agg)}")
+              f"resolved_items={matched}/{len(agg)} items")
     if not stock_history:
         print("[SAP stock history] no dated backfill files found — skipped, non-blocking")
 

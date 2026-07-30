@@ -67,9 +67,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
 
-      # ingestion/sap.py shells out to mdb-export for the Access SAP source.
-      # A soft dependency (it falls back to the xlsx snapshot), installed so
-      # the primary code path is the one under test.
+      # Test-only since 2026-07-30: the pipeline reads stock from the weekly
+      # ZM13 xlsx now, but test_sap_crosswalk_integration still drives the
+      # legacy Access parser to check crosswalk resolution against real data.
       - name: Install mdbtools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mdbtools
 

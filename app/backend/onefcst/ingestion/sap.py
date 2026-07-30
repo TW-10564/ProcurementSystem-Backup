@@ -25,7 +25,18 @@ wrong order-quantity suggestion (real money), while a missed match just
 means no suggestion appears at all. A human-curated mapping is far less
 likely to produce the former.
 
-Primary source as of 2026-07-14: SAP_ACCDB_PATH (SAP在庫抽出.accdb), the
+NO LONGER IN THE PIPELINE as of 2026-07-30. build.py now reads stock from the
+weekly ZM13 files (ingestion/sap_stock_history.py) for BOTH "current" and
+history: measured on 2026-07-27 the accdb and the weekly file agreed on 496 of
+497 resolved items, so this was a second copy of the same pull in a second
+format, costing a system package (mdbtools) and a duplicate StockState row per
+item per week. The weekly raw file also resolves more rows — every row carries
+品目, while the processed table left あだ名 blank on ~200 rows. These parsers are
+kept because tests/test_sap_crosswalk_integration.py still exercises the
+crosswalk against real data through them, and because the processed format is
+what SAP hands out if the raw export ever stops.
+
+Historical note — primary source 2026-07-14 to 2026-07-30: SAP_ACCDB_PATH (SAP在庫抽出.accdb), the
 live weekly-refreshed Access DB sitting in ONE_DIR — its 'SAP在庫データ加工後'
 table already has this exact SYOCODE/QTY/SYONAME/SBRCODE/SBRNAME shape, just
 with no あだ名 column at all (the accdb's own あだ名 table has every SYOCODE

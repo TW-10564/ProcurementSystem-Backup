@@ -239,7 +239,15 @@ forecasting scope is broader than this table implies — the two-tier
 architecture above also covers ONE計画's master 部品予測/部品マスター sheets,
 NotePC lifecycle data, and ①②③④ sales-plan sources.
 
-**SAP stock file** (`260629在庫.xlsx`-style weekly ZM13 extract, `あですな`
+**SAP stock** comes from the weekly ZM13 drop `★週頭在庫(ZM13)` on the NAS
+(`data/sap/週頭在庫_ZM13/在庫_MMDD.xlsx` locally, mirrored by `nas_sync`). The
+NEWEST file is "current stock", the older ones are history — one code path for
+both (`build._aggregate_zm13`), so they cannot drift. Resolution order per row:
+品目 (=SYOCODE) as 商品コード → 品目テキスト as ONE綽名 → the 製品名称読みかえ
+crosswalk. `SAP在庫抽出.accdb` is **no longer read** (2026-07-30): it was the
+same weekly pull in a second format, agreeing on 496/497 items.
+
+**Legacy SAP stock file** (`260629在庫.xlsx`-style weekly ZM13 extract, `あですな`
 → `SBRCODE | SBRNAME | あだ名 | SYOCODE | SYONAME | QTYの合計`): joins to
 ONE 綽名; multiple SYOCODE rows per あだ名 are summed. Blank-あだ名 rows are
 matched via a SYONAME/keyword heuristic in
@@ -285,11 +293,13 @@ matched via a SYONAME/keyword heuristic in
 ## Dependencies
 
 `app/backend`: `fastapi uvicorn sqlalchemy openpyxl pyxlsb pydantic` (see
-`app/backend/requirements.txt`), plus the system package `mdbtools` (`sudo
-apt-get install -y mdbtools`) for reading the live SAP stock source
-(`SAP在庫抽出.accdb`, an Access DB — see `ingestion/sap.py`); soft
-dependency, falls back to an xlsx snapshot if unavailable. `app/frontend`:
-React + TS + Vite (see `app/frontend/package.json`).
+`app/backend/requirements.txt`). `app/frontend`: React + TS + Vite (see
+`app/frontend/package.json`).
+
+`mdbtools` is **no longer needed to run the system** (2026-07-30): stock comes
+from the weekly ZM13 xlsx, not `SAP在庫抽出.accdb`. It stays installed in CI only
+because `tests/test_sap_crosswalk_integration.py` still exercises the crosswalk
+through the legacy Access parser; the Docker image no longer ships it.
 
 For the Postgres backend: `psycopg[binary]`, plus the `pg_dump` client binary
 — `rebuild_preserving.backup_db()` shells out to `pg_dump -Fc` and now

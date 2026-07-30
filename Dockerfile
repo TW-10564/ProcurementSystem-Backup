@@ -34,9 +34,6 @@ RUN npm run build
 # ----------------------------------------------------------------- runtime
 FROM python:3.13-slim AS runtime
 
-# mdbtools      — ingestion/sap.py shells out to mdb-export for the Access
-#                 SAP source (soft dep, but it is the PRIMARY source since
-#                 2026-07-14; without it stock silently falls back to xlsx).
 # postgresql-client-17 — rebuild_preserving.backup_db() shells out to
 #                 pg_dump. NOT optional: a failed backup now ABORTS the
 #                 rebuild by design, so an image without it cannot rebuild
@@ -54,7 +51,9 @@ RUN set -eux; \
 https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" \
         > /etc/apt/sources.list.d/pgdg.list; \
     apt-get update; \
-    apt-get install -y --no-install-recommends mdbtools postgresql-client-17; \
+    # mdbtools is deliberately NOT installed any more: since 2026-07-30 the
+    # pipeline reads stock from the weekly ZM13 xlsx, not SAP在庫抽出.accdb.
+    apt-get install -y --no-install-recommends postgresql-client-17; \
     apt-get purge -y --auto-remove curl gnupg; \
     rm -rf /var/lib/apt/lists/*
 
