@@ -109,9 +109,15 @@ easier to debug than doing both at once.
 
 - [ ] **3.1** Confirm the DNS rename landed and the cert matches the corrected
       spelling. The Entra redirect URI must match **exactly**, including scheme.
-- [ ] **3.2** Add `ENTRA_TENANT_ID/CLIENT_ID/CLIENT_SECRET/REDIRECT_URI` to
-      `/srv/onefcst/.env`, plus `ENTRA_COOKIE_SECRET`
-      (`openssl rand -base64 32 | head -c 32` — must be exactly 16/24/32 bytes).
+- [ ] **3.2** Fill the `ENTRA_*` block in `/srv/onefcst/.env` — the slots are
+      already named and documented in `deploy/compose.env.example`. Tenant and
+      client ID received 2026-07-30; only the **secret** is outstanding.
+      Generate the cookie secret yourself:
+      `openssl rand -base64 32 | head -c 32`. Then validate before starting
+      anything: `deploy/check-sso-config.sh /srv/onefcst/.env` — it catches a
+      swapped GUID, the Secret **ID** pasted instead of the **Value**, a wrong
+      cookie length, and a malformed redirect URI, and it confirms issuer
+      discovery actually resolves for that tenant.
 - [ ] **3.3** Start the overlay:
       `docker compose --env-file /srv/onefcst/.env -p onefcst -f docker-compose.yml -f deploy/docker-compose.sso.yml up -d`.
       Check oauth2-proxy's own logs before touching nginx — a bad client secret
