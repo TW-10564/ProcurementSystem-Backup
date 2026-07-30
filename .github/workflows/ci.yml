@@ -1,0 +1,141 @@
+name: CI
+
+# The point of this workflow is the DUAL-DIALECT backend leg. db.py supports
+# both SQLite (local/dev, DATABASE_URL unset) and PostgreSQL (the DGX
+# deployment), and only running the suite on both catches the class of bug
+# that shipped silently for months — SQLite-only SQL functions
+# (func.julianday) and unpinned NULL ordering, which inverts "last row wins"
+# loops between the two engines. See CLAUDE.md → "Portability rules".
+#
+# NOTE on coverage: 27 of the 356 tests are integration tests against a
+# populated database (or the 製品名称読みかえ crosswalk file), both of which
+# need the NAS Excel sources — gitignored and unreachable from a GitHub
+# runner. They SKIP here, so a green run means 329 passed / 27 skipped. CI
+# proves portability and unit behaviour; it does not replace a real rebuild
+# on the DGX.
+
+on:
+  push:
+    branches: [main, pre-deploy]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (${{ matrix.dialect }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dialect: [sqlite, postgres]
+
+    # Defined unconditionally — `services` cannot be made matrix-conditional.
+    # The sqlite leg simply leaves ONEFCST_TEST_DATABASE_URL unset and never
+    # connects to it. postgres:17 matches docker-compose.yml.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: onefcst
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: onefcst
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U onefcst -d onefcst"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.13 matches the Dockerfile runtime (python:3.13-slim).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: app/backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: app/backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # ingestion/sap.py shells out to mdb-export for the Access SAP source.
+      # A soft dependency (it falls back to the xlsx snapshot), installed so
+      # the primary code path is the one under test.
+      - name: Install mdbtools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mdbtools
+
+      # test_auth.py / test_rate_limit.py drive real endpoints against the
+      # app's own database (config.DB_PATH), not an injected in-memory engine.
+      # They assert nothing about the DATA, but the TABLES have to exist or
+      # every request 500s on `no such table: items`. A fresh checkout has no
+      # app/data, so create an empty schema in a scratch data dir.
+      - name: Create empty app schema
+        working-directory: app/backend
+        env:
+          ONEFCST_DATA_DIR: ${{ runner.temp }}/onefcst-data
+        run: python -c "from onefcst.db import init_db; init_db()"
+
+      # `python -m pytest` (not bare `pytest`) — there is no pytest config or
+      # installed package, so the onefcst import relies on cwd being on
+      # sys.path.
+      - name: pytest
+        working-directory: app/backend
+        env:
+          ONEFCST_DATA_DIR: ${{ runner.temp }}/onefcst-data
+          ONEFCST_TEST_DATABASE_URL: ${{ matrix.dialect == 'postgres' && 'postgresql+psycopg://onefcst:devpass@localhost:5432/onefcst' || '' }}
+        run: python -m pytest tests/ -q -rs --durations=10
+
+  frontend:
+    name: frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 24 matches the Dockerfile frontend stage (node:24-slim).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+
+      - name: npm ci
+        working-directory: app/frontend
+        run: npm ci
+
+      # `npm run build` (tsc -b && vite build), NOT `vite build` alone:
+      # tsconfig.json here is a solution file with references only, so
+      # `tsc --noEmit -p tsconfig.json` type-checks nothing and masks real
+      # errors. Only the project build catches them.
+      - name: Build
+        working-directory: app/frontend
+        run: npm run build
+
+  docker:
+    name: docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only — never pushed anywhere. This catches Dockerfile drift
+      # (a moved path, a dependency that no longer resolves) without needing
+      # a registry. VITE_API_KEY is deliberately empty: it is compiled into
+      # the bundle, so a real key must never enter a CI image.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -19,14 +19,16 @@ from datetime import date
 
 import pytest
 
-from onefcst.config import DB_PATH, TIER1_CATEGORIES
+from realdata import HAS_BUILT_DB, SKIP_REASON
+
+from onefcst.config import TIER1_CATEGORIES
 from onefcst.db import get_session
 from onefcst.engine import baseline
 from onefcst.forecasting import _series_by_item
 from onefcst.models import Item
 from onefcst import tier2_forecasting
 
-pytestmark = pytest.mark.skipif(not DB_PATH.exists(), reason="onefcst.db not built")
+pytestmark = pytest.mark.skipif(not HAS_BUILT_DB, reason=SKIP_REASON)
 
 
 @pytest.fixture(scope="module")

@@ -54,6 +54,14 @@ keep working — the test suite runs on either via `ONEFCST_TEST_DATABASE_URL`:
 cd app/backend && ONEFCST_TEST_DATABASE_URL=postgresql+psycopg://… python3 -m pytest tests/ -q
 ```
 
+`.github/workflows/ci.yml` runs exactly that on both dialects (plus
+`npm run build` and a `docker build`) on every push/PR. It runs on a bare
+checkout, so the 27 tests needing NAS-built data skip — a green run is
+**329 passed / 27 skipped**. The skip guard is `tests/realdata.py`
+(`HAS_BUILT_DB`), which asks the database whether `items` has rows; do not
+go back to `DB_PATH.exists()` — an empty SQLite file is created as a side
+effect of connecting, so that guard let 24 tests run against an empty DB.
+
 Portability rules that apply to *all* new query code:
 - **Never** use SQLite-only SQL functions (`julianday`, `strftime`) — they
   raise `UndefinedFunction` on Postgres. Fallback branches count; one of these

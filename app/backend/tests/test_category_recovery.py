@@ -8,11 +8,13 @@ meaning from items that DO have a real category (from 部品予測) and share
 that code."""
 import pytest
 
-from onefcst.config import DB_PATH, TIER1_CATEGORIES
+from realdata import HAS_BUILT_DB, SKIP_REASON
+
+from onefcst.config import TIER1_CATEGORIES
 from onefcst.db import get_session
 from onefcst.models import Item
 
-pytestmark = pytest.mark.skipif(not DB_PATH.exists(), reason="onefcst.db not built")
+pytestmark = pytest.mark.skipif(not HAS_BUILT_DB, reason=SKIP_REASON)
 
 
 @pytest.fixture(scope="module")

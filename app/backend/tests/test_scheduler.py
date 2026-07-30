@@ -9,7 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from onefcst.config import DB_PATH
+from realdata import HAS_BUILT_DB, SKIP_REASON
+
 from onefcst.db import get_session
 from onefcst import scheduler
 
@@ -57,7 +58,7 @@ def test_is_due_boundary_is_inclusive():
     assert scheduler.is_due(_session_with_run(exact), interval_hours=24) is True
 
 
-@pytest.mark.skipif(not DB_PATH.exists(), reason="onefcst.db not built")
+@pytest.mark.skipif(not HAS_BUILT_DB, reason=SKIP_REASON)
 def test_run_if_due_skips_when_a_recent_run_exists():
     # this session's earlier manual runs are recent (minutes old), well
     # inside the default 24h interval — a real end-to-end "not due" check
