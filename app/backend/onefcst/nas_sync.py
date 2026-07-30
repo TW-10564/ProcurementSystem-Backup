@@ -144,15 +144,23 @@ def refresh_from_nas(timeout_seconds: int = 180) -> dict:
     # /XO: only copy files newer than what's already at the destination —
     # cheap on repeat runs, and never deletes local files Z: doesn't have
     # (a stale-but-present file beats a hole in the required set).
+    # $LASTEXITCODE is captured per robocopy and reported back. Without it this
+    # function returned {"status": "ok"} whether or not anything was actually
+    # copied — powershell.exe exits 0 as long as the SCRIPT ran, so an
+    # unreachable share, expired credentials or a permission change all looked
+    # like a clean sync over stale files. Found 2026-07-30 while verifying a
+    # rebuild by hand against the share; the DGX path (mount mode) already
+    # errored on a missing/empty mount, this is the dev path catching up.
     ps_script = (
         f'$dest = "{dest_win}"\n'
         f'New-Item -ItemType Directory -Force -Path $dest | Out-Null\n'
         f'$before = (Get-ChildItem $dest -File | Measure-Object).Count\n'
         f'robocopy "{NAS_SOURCE_WIN}" $dest /XO /R:1 /W:1 /NDL /NJH | Out-Null\n'
+        f'Write-Output "ONE_RC=$LASTEXITCODE"\n'
         f'$after = (Get-ChildItem $dest -File | Measure-Object).Count\n'
         f'Write-Output "FILES_AFTER=$after"\n'
     )
-    for tag, unc, _cache in SAP_SYNC_SOURCES:
+    for tag, unc, _cache in SUBFOLDER_SYNC_SOURCES:
         dw = sap_dests.get(tag)
         if dw is None:
             continue
@@ -160,6 +168,7 @@ def refresh_from_nas(timeout_seconds: int = 180) -> dict:
             f'$d = "{dw}"\n'
             f'New-Item -ItemType Directory -Force -Path $d | Out-Null\n'
             f'robocopy "{unc}" $d /XO /R:1 /W:1 /NDL /NJH | Out-Null\n'
+            f'Write-Output "{tag.upper()}_RC=$LASTEXITCODE"\n'
             f'Write-Output "{tag.upper()}_AFTER=$((Get-ChildItem $d -File | Measure-Object).Count)"\n'
         )
     encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
@@ -180,6 +189,7 @@ def refresh_from_nas(timeout_seconds: int = 180) -> dict:
 
     files_after = None
     sap_counts: dict[str, int] = {}
+    exit_codes: dict[str, int] = {}
     for line in result.stdout.splitlines():
         line = line.strip()
         if line.startswith("FILES_AFTER="):
@@ -187,20 +197,48 @@ def refresh_from_nas(timeout_seconds: int = 180) -> dict:
                 files_after = int(line.split("=", 1)[1])
             except ValueError:
                 pass
+        elif line.startswith("ONE_RC="):
+            try:
+                exit_codes["one"] = int(line.split("=", 1)[1])
+            except ValueError:
+                pass
         else:
-            for tag, _unc, _cache in SAP_SYNC_SOURCES:
-                prefix = f"{tag.upper()}_AFTER="
-                if line.startswith(prefix):
+            for tag, _unc, _cache in SUBFOLDER_SYNC_SOURCES:
+                if line.startswith(f"{tag.upper()}_AFTER="):
                     try:
                         sap_counts[tag] = int(line.split("=", 1)[1])
                     except ValueError:
                         pass
+                elif line.startswith(f"{tag.upper()}_RC="):
+                    try:
+                        exit_codes[tag] = int(line.split("=", 1)[1])
+                    except ValueError:
+                        pass
+
+    # robocopy's exit code is a BITMASK, not a severity: 0 nothing to copy,
+    # 1 files copied, 2 extras present, 4 mismatches, and only >= 8 means a
+    # real failure. So "0" is a perfectly healthy weekly run where the NAS has
+    # nothing newer — treating a non-zero code as failure would cry wolf on
+    # every second rebuild.
+    failed = {k: rc for k, rc in exit_codes.items() if rc >= 8}
 
     # "sap_folders" keeps its name so existing rebuild reports stay comparable,
     # even though it now also carries the "plan" count.
-    return {"status": "ok", "one_dir": str(ONE_DIR), "files_in_cache": files_after,
-            "sap_folders": sap_counts,
-            "synced_folders": sap_counts}
+    out = {"status": "error" if failed else "ok",
+           "one_dir": str(ONE_DIR), "files_in_cache": files_after,
+           "sap_folders": sap_counts,
+           "synced_folders": sap_counts,
+           "robocopy_exit_codes": exit_codes}
+    if failed:
+        # Still NOT an exception: the build can legitimately proceed on the
+        # existing cache (build._check_required_sources is the real gate). This
+        # only ensures the rebuild report says so out loud.
+        out["reason"] = (
+            "robocopy failed for " + ", ".join(f"{k} (exit {rc})" for k, rc in sorted(failed.items()))
+            + " — the share may be disconnected, credentials expired, or the "
+              "folder renamed. Sources below are whatever was ALREADY cached, "
+              "so treat their dates as unverified.")
+    return out
 
 
 if __name__ == "__main__":

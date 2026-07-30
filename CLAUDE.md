@@ -111,6 +111,11 @@ Deployment gotchas that have already bitten:
   references only) and will mask real type errors.
 - `ONEFCST_NAS_MODE=mount` makes a missing/empty NAS mount an error rather
   than the old silent skip (`nas_sync.py`).
+- On the dev box, `nas_sync` now reports each robocopy's exit code and turns
+  `status: "error"` on `>= 8` (a bitmask: 0 = nothing newer, 1 = copied,
+  2 = extras — all healthy). Before this, an unreachable share reported a
+  clean sync over stale files. It still never raises: the build may proceed
+  on cache, and `_check_required_sources()` is the real gate.
 
 ### Maintenance mode is for deployments, not rebuilds
 
