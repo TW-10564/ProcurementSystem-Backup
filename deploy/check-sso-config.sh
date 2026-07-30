@@ -45,7 +45,9 @@ echo "checking $ENV_FILE"
   && bad "tenant and client ID are identical — one of them is pasted wrong"
 
 if [ -z "$SECRET" ]; then
-  warn "ENTRA_CLIENT_SECRET is empty — fill it in before starting the overlay"
+  echo "  ---- ENTRA_CLIENT_SECRET not set — fine until you enable SSO."
+  echo "       Only needed the day the overlay starts; request it then, since"
+  echo "       Entra secrets expire from their creation date."
 elif [[ "$SECRET" =~ $GUID ]]; then
   bad "ENTRA_CLIENT_SECRET is a GUID — that is the Secret ID, not the VALUE.
        Entra shows the Value once, in the column beside it. If it is gone,

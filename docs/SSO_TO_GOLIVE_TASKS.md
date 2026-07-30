@@ -7,9 +7,9 @@ What you are waiting for:
 
 | Value | Goes into |
 |---|---|
-| `ENTRA_TENANT_ID` | `/srv/onefcst/.env` |
-| `ENTRA_CLIENT_ID` | `/srv/onefcst/.env` |
-| `ENTRA_CLIENT_SECRET` | `/srv/onefcst/.env` |
+| `ENTRA_TENANT_ID` | ✅ received 2026-07-30 → `/srv/onefcst/.env` |
+| `ENTRA_CLIENT_ID` | ✅ received 2026-07-30 → `/srv/onefcst/.env` |
+| `ENTRA_CLIENT_SECRET` | **not requested yet, on purpose** — ask for it the day phase 3 starts. Entra secrets expire from their creation date, so an early one just burns clock. Required then: oauth2-proxy is a confidential client and cannot do the token exchange without it. |
 | Redirect URI registered as `https://one-forecast.twave.co.jp/oauth2/callback` | Entra app registration (their side) |
 | Group/role claim names for `Purchasing` / `Planning` / `Admin` | Phase 4 below |
 | DNS rename `one-forcast` → `one-forecast` | TLS cert + the redirect URI |
