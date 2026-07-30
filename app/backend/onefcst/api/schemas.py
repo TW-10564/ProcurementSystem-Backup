@@ -1,9 +1,12 @@
 """Pydantic request/response contracts for the API layer."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from pydantic import BaseModel, Field
+
+# Every timestamp this API emits is timezone-aware UTC — see onefcst/timeutil.
+from ..timeutil import UtcDatetime
 
 
 class CompatRuleOut(BaseModel):
@@ -45,9 +48,9 @@ class OrderActionOut(BaseModel):
     expected_arrival_date: date | None = None
     note: str | None = None
     ordered_by: str | None = None
-    ordered_at: datetime | None = None
+    ordered_at: UtcDatetime | None = None
     received_by: str | None = None
-    received_at: datetime | None = None
+    received_at: UtcDatetime | None = None
 
     class Config:
         from_attributes = True
@@ -102,7 +105,7 @@ class AdjustmentOut(BaseModel):
     scope: str
     reason: str
     author: str
-    created_at: datetime
+    created_at: UtcDatetime
 
     class Config:
         from_attributes = True

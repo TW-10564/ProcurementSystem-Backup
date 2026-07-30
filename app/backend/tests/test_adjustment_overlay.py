@@ -31,9 +31,12 @@ def test_single_month_override_leaves_other_months_untouched():
     final, detail = _apply_adjustments(569, MONTHS, baseline, adjustments)
     assert final == [154.5, 78.0, 154.5, 154.5]
     assert set(detail) == {1}                        # only August (index 1)
+    # created_at carries +00:00: the column is naive UTC, and everything the
+    # API emits is offset-aware so browsers stop parsing it as local time
+    # (onefcst/timeutil, test_timestamps_are_utc_aware.py).
     assert detail[1] == {"baseline": 154.5, "adjusted": 78.0,
                          "reason": "X3D phase-out", "author": "tester",
-                         "created_at": "2026-07-07T00:00:00"}
+                         "created_at": "2026-07-07T00:00:00+00:00"}
 
 
 def test_adjustment_for_a_different_item_does_not_leak():

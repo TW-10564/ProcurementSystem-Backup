@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { api } from "../api/client";
+import { useEffect, useRef, useState } from "react";
+import { api, SERVER_ERROR_EVENT } from "../api/client";
 import type { MaintenanceState } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 
@@ -17,20 +17,32 @@ import { useLang } from "../i18n/LanguageContext";
  *  - a poll FAILURE never turns the gate on: the backend being unreachable
  *    is not evidence of maintenance, and locking people out on a transient
  *    network blip would be worse than the problem being solved
+ *  - but any 5xx elsewhere in the app makes it re-poll IMMEDIATELY
+ *    (SERVER_ERROR_EVENT). On the 20s timer alone, the start of a rebuild —
+ *    which drops every table, so live requests 500 — showed users a raw
+ *    error screen for up to 20s before this notice replaced it. The event
+ *    only prompts a re-check; /maintenance still decides.
  *  - dismissible. This is an honest notice, not a security control — anyone
  *    who needs to keep working (including whoever is doing the maintenance)
  *    can continue, and keeps a persistent banner as a reminder.
  */
 const POLL_MS = 20000;
+// Floor between event-driven re-polls. A failing page fires one event per
+// failed request (the dashboard issues several in parallel), and a rebuild
+// keeps them failing for minutes — without this, one broken screen would
+// hammer /maintenance. 2s is still imperceptible next to the old 20s wait.
+const MIN_EVENT_GAP_MS = 2000;
 
 export default function MaintenanceGate({ children }: { children: React.ReactNode }) {
   const { t, lang } = useLang();
   const [state, setState] = useState<MaintenanceState | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const lastPollAt = useRef(0);
 
   useEffect(() => {
     let alive = true;
     const tick = async () => {
+      lastPollAt.current = Date.now();
       try {
         const s = await api.maintenance();
         if (!alive) return;
@@ -41,11 +53,17 @@ export default function MaintenanceGate({ children }: { children: React.ReactNod
         /* unreachable backend is not maintenance — leave the app usable */
       }
     };
+    const onServerError = () => {
+      if (Date.now() - lastPollAt.current < MIN_EVENT_GAP_MS) return;
+      tick();
+    };
     tick();
     const id = window.setInterval(tick, POLL_MS);
+    window.addEventListener(SERVER_ERROR_EVENT, onServerError);
     return () => {
       alive = false;
       window.clearInterval(id);
+      window.removeEventListener(SERVER_ERROR_EVENT, onServerError);
     };
   }, []);
 

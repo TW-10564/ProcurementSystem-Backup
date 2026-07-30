@@ -16,7 +16,7 @@ entry is just a status record, not the rebuild's actual effect — that's
 durably reflected in the DB itself either way)."""
 from __future__ import annotations
 
-from datetime import datetime
+from .timeutil import utc_now
 
 MAX_HISTORY = 20
 
@@ -31,7 +31,7 @@ def start(trigger: str) -> dict:
     there's no separate id-lookup path to keep in sync."""
     global _next_id
     entry = {"id": _next_id, "trigger": trigger, "status": "running",
-             "started_at": datetime.utcnow().isoformat(), "finished_at": None,
+             "started_at": utc_now().isoformat(), "finished_at": None,
              "report": None, "error": None}
     _next_id += 1
     _history.insert(0, entry)
@@ -41,13 +41,13 @@ def start(trigger: str) -> dict:
 
 def finish(entry: dict, report: dict) -> None:
     entry["status"] = "done"
-    entry["finished_at"] = datetime.utcnow().isoformat()
+    entry["finished_at"] = utc_now().isoformat()
     entry["report"] = report
 
 
 def fail(entry: dict, error: str) -> None:
     entry["status"] = "error"
-    entry["finished_at"] = datetime.utcnow().isoformat()
+    entry["finished_at"] = utc_now().isoformat()
     entry["error"] = error
 
 

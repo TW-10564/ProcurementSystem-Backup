@@ -21,6 +21,7 @@ from .. import scheduler as scheduler_mod
 from ..config import CORS_ORIGINS
 from ..db import get_session
 from ..models import Item, Suggestion
+from ..timeutil import utc_now
 from ..advisory import rules as rules_svc
 from ..advisory import adjustments as adj_svc
 from ..advisory import notifications as notif_svc
@@ -73,7 +74,7 @@ def db():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "time": datetime.utcnow().isoformat()}
+    return {"status": "ok", "time": utc_now().isoformat()}
 
 
 # ------------------------------------------------------------------ build ---

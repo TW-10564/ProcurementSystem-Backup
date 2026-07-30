@@ -26,6 +26,7 @@ import json
 from datetime import date, timedelta
 
 from . import config
+from .timeutil import as_utc_iso
 from .models import (AccuracyScore, Actual, Adjustment, Forecast, ForecastRun,
                     Item, PlanValue, Snapshot, StockState, WeeklyActual)
 from .engine.stock_projection import suggest_order
@@ -46,7 +47,7 @@ def _latest_run(session) -> ForecastRun | None:
 
 def _run_info(run: ForecastRun) -> dict:
     info = {"run_id": run.id, "method_version": run.method_version,
-            "created_at": run.created_at.isoformat() if run.created_at else None}
+            "created_at": as_utc_iso(run.created_at)}
     if run.note:
         info.update(json.loads(run.note))
     return info
@@ -294,7 +295,7 @@ def _apply_adjustments(item_id: int, months: list[date], baseline_qtys: list[flo
                 new_val = baseline_qtys[i] * factor if factor is not None else adj.new_value
             detail[i] = {"baseline": baseline_qtys[i], "adjusted": new_val,
                         "reason": adj.reason, "author": adj.author,
-                        "created_at": adj.created_at.isoformat() if adj.created_at else None}
+                        "created_at": as_utc_iso(adj.created_at)}
             final[i] = new_val
     return final, detail
 
@@ -322,7 +323,7 @@ def _order_action_out(oa, today: date) -> dict:
         "expected_arrival_date": (oa.expected_arrival_date.isoformat()
                                  if oa.expected_arrival_date else None),
         "note": oa.note, "ordered_by": oa.ordered_by,
-        "ordered_at": oa.ordered_at.isoformat() if oa.ordered_at else None,
+        "ordered_at": as_utc_iso(oa.ordered_at),
         "awaiting_confirmation": bool(oa.expected_arrival_date and oa.expected_arrival_date <= today),
     }
 

@@ -26,10 +26,10 @@ request):
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 
 from .config import DATA_DIR
+from .timeutil import utc_now
 
 STATE_PATH = Path(DATA_DIR) / "maintenance.json"
 
@@ -58,8 +58,12 @@ def set_state(enabled: bool, message: str = "", by: str | None = None) -> dict:
         "message": (message or "").strip(),
         # keep the original start time across message edits, so the banner
         # can honestly say how long this has been going on
+        # UTC with an explicit offset, like every other timestamp the API
+        # emits (timeutil): this used to be naive LOCAL time while
+        # /build/rebuild/status was naive UTC, so the two endpoints described
+        # the same rebuild nine hours apart.
         "since": (get_state().get("since") if enabled and get_state()["enabled"]
-                  else (datetime.now().isoformat() if enabled else None)),
+                  else (utc_now().isoformat() if enabled else None)),
         "by": by,
     }
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)

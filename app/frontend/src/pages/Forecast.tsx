@@ -437,10 +437,11 @@ export default function Forecast() {
         const s = await api.rebuildStatus();
         failures = 0;
         if (s.status === "running") {
-          // Backend stamps started_at with datetime.utcnow().isoformat() —
-          // no timezone suffix — so it must be read as UTC explicitly, the
-          // same "+ Z" the history table below already does.
-          if (s.started_at) setRebuildStartedAt(new Date(s.started_at + "Z").getTime());
+          // started_at carries an explicit +00:00 offset (backend
+          // onefcst/timeutil) — no manual "Z" patching. The four sites that
+          // used to append one silently broke as soon as the field gained a
+          // real offset ("...+00:00Z" parses as Invalid Date).
+          if (s.started_at) setRebuildStartedAt(new Date(s.started_at).getTime());
           rebuildTimer.current = window.setTimeout(tick, 3000);
           return;
         }
@@ -496,7 +497,7 @@ export default function Forecast() {
   const rebuildEstimateMs = useMemo(() => {
     const durations = rebuildHistory
       .filter((h) => h.status === "done" && h.started_at && h.finished_at)
-      .map((h) => new Date(h.finished_at! + "Z").getTime() - new Date(h.started_at + "Z").getTime())
+      .map((h) => new Date(h.finished_at!).getTime() - new Date(h.started_at).getTime())
       .filter((d) => d > 5000)
       .sort((a, b) => a - b);
     if (!durations.length) return 7 * 60_000;
@@ -680,7 +681,7 @@ export default function Forecast() {
   };
 
   const lastRunAt = run_?.created_at
-    ? new Date(run_.created_at + "Z").toLocaleString(lang === "ja" ? "ja-JP" : "en-US")
+    ? new Date(run_.created_at).toLocaleString(lang === "ja" ? "ja-JP" : "en-US")
     : "—";
 
   return (
@@ -798,7 +799,7 @@ export default function Forecast() {
                           </span>
                         </td>
                         <td className="dim mono" style={{ fontSize: "0.78rem" }}>
-                          {new Date(h.started_at + "Z").toLocaleString(lang === "ja" ? "ja-JP" : "en-US")}
+                          {new Date(h.started_at).toLocaleString(lang === "ja" ? "ja-JP" : "en-US")}
                         </td>
                         <td>
                           {h.status === "running" && <span className="pill">{t("fc_rebuilding")}</span>}

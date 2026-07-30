@@ -35,6 +35,36 @@ const http = axios.create({
   headers: API_KEY ? { "X-API-Key": API_KEY } : undefined,
 });
 
+/**
+ * Fired whenever a request fails in a way a rebuild would explain: any 5xx,
+ * or no response at all (backend restarting).
+ *
+ * Why: a rebuild drops every table, so requests already in flight come back
+ * `no such table: forecasts` -> 500. MaintenanceGate polls on a 20s timer, so
+ * users saw a raw error screen for up to 20s before the 「再構築中」 notice
+ * appeared — reported as a bug on 2026-07-30, and it looks exactly like the
+ * system being broken. The gate listens for this and re-polls at once.
+ *
+ * Deliberately just a signal, not a verdict: a 500 is NOT evidence of
+ * maintenance. Only /maintenance decides, so a genuine unrelated 500 makes
+ * one extra cheap request and changes nothing on screen.
+ */
+export const SERVER_ERROR_EVENT = "onefcst:server-error";
+
+http.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    const status = err?.response?.status as number | undefined;
+    // Never fire for /maintenance itself: the listener answers by calling it,
+    // so a failing probe would re-trigger its own listener indefinitely.
+    const isProbe = (err?.config?.url ?? "").includes("/maintenance");
+    if (!isProbe && (status === undefined || status >= 500)) {
+      window.dispatchEvent(new Event(SERVER_ERROR_EVENT));
+    }
+    return Promise.reject(err);
+  },
+);
+
 export interface MaintenanceState {
   enabled: boolean;
   message: string;
