@@ -43,7 +43,7 @@ services:
       # localhost/127.0.0.1 — any other host, including a bare LAN IP like
       # 172.16.6.91, must be https or the registration is rejected. So this
       # trial has to be driven from a browser ON THIS MACHINE.
-      - --redirect-url=${ENTRA_REDIRECT_URI:-http://localhost:4180/oauth2/callback}
+      - --redirect-url=${ENTRA_REDIRECT_URI:-http://localhost:5173/oauth2/callback}
       - --http-address=0.0.0.0:4180
       - "--cookie-secret=${ENTRA_COOKIE_SECRET:?generate one with openssl rand -base64 32 then head -c 32}"
       - --cookie-secure=false
@@ -56,8 +56,18 @@ services:
       # Without this, hitting / returns 403 with an interstitial button, which
       # reads as a failure and is not one. With it, / is a 302 to Entra.
       - --skip-provider-button=true
-      # the app running natively on this host, outside docker
-      - --upstream=http://host.docker.internal:8600
+      # Upstream is the VITE DEV SERVER, moved to 5174, because the proxy has
+      # taken over 5173 — the URL the browser actually opens. Everything the
+      # SPA needs goes through here, including its API calls: the frontend is
+      # configured with VITE_API_BASE=/api (same-origin), and Vite forwards
+      # /api to uvicorn on 8600. So guarding this one port guards the page AND
+      # the data. Point it at 8600 instead to test the built SPA the way
+      # production serves it:
+      #   ENTRA_LOCAL_UPSTREAM=http://host.docker.internal:8600
+      - --upstream=${ENTRA_LOCAL_UPSTREAM:-http://host.docker.internal:5174}
+      # Vite's HMR websocket must survive the hop or every edit needs a manual
+      # reload. On by default in oauth2-proxy; stated here so it isn't "tidied".
+      - --proxy-websockets=true
       # /health must stay reachable unauthenticated, same as in production
       - --skip-auth-regex=^/health$$
       # verbose: we WANT to see the discovery fetch and the token exchange
@@ -67,7 +77,14 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "127.0.0.1:4180:4180"
+      # The proxy OWNS 5173 — the port you already open in the browser — so
+      # that URL now requires sign-in. Vite moves to 5174 and must stay bound
+      # to 0.0.0.0 for the container to reach it, so 5174 IS an
+      # unauthenticated bypass for anyone on the LAN while this rig runs.
+      # Acceptable for a dev trial on one box; it is not a deployment model.
+      # Production has no Vite at all: nginx serves the built bundle and the
+      # only listener is 8600 on loopback (deploy/docker-compose.sso.yml).
+      - "127.0.0.1:${ENTRA_LOCAL_PORT:-5173}:4180"
     environment:
       TZ: ${TZ:-Asia/Tokyo}
       # the corporate proxy — oauth2-proxy must reach login.microsoftonline.com
