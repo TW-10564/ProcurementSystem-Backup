@@ -90,8 +90,12 @@ easier to debug than doing both at once.
 - [ ] **2.6** One full rebuild on the DGX: `python -m onefcst.rebuild_preserving`.
       Expect Gate A ≈ 99.8 % and ~4–5 min. This is the first time the container
       reads the real NAS rather than a cache.
-- [ ] **2.7** TLS cert for `one-forecast.twave.co.jp` installed at
-      `/etc/onefcst/tls/`, mode 0600 on the key.
+- [ ] **2.7** TLS: the DigiCert wildcard `*.twave.co.jp` is in hand (valid to
+      **2026-12-02**) and verified — key matches, chain verifies, TLSv1.3
+      handshake with `Verify return code: 0`. Copy the three files to the DGX
+      out-of-band, then `sudo deploy/install-tls-cert.sh star_twave_co_jp.crt
+      "DigiCertCA 1.crt" newkey.pem`. Diary the renewal for **November 2026**;
+      the script warns inside 30 days, but only when it is run.
 - [ ] **2.8** `deploy/nginx-onefcst-docker.conf` into `/etc/nginx/conf.d/`,
       `nginx -t`, reload. It now ships HSTS + CSP + `nosniff` +
       `X-Frame-Options` and overwrites `X-Forwarded-For` (audit fixes).

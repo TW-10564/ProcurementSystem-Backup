@@ -23,6 +23,13 @@ app/backend/.env.production
 app/frontend/.env
 app/frontend/.env.production
 deploy/tls/
+# TLS material anywhere in the tree — the image never serves TLS (nginx does,
+# on the host), so none of this belongs in a build context.
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
 
 .git
 .gitignore

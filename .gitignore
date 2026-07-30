@@ -68,3 +68,14 @@ SAP在庫抽出.db*
 # git worktrees Claude Code creates, plus the archived diffs of removed ones
 .claude/worktrees/
 .claude/worktree-archive/
+
+# TLS material — NEVER commit. A private key in git history cannot be un-leaked;
+# it has to be reissued. Dropped into the repo root 2026-07-30, caught while
+# still untracked.
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+*.csr
+INSTALL_INSTRUCTIONS*.txt

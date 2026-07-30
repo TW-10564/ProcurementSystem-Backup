@@ -106,12 +106,28 @@ especially `adjustments`, `compat_rules`, `audit_log`, `order_actions`.
 
 ## 5. TLS and nginx
 
+A real DigiCert wildcard `*.twave.co.jp` certificate is on hand (received
+2026-07-30, valid **until 2026-12-02**), so no self-signed step is needed. It
+covers `one-forecast.twave.co.jp`; it does **not** cover deeper names.
+
+Copy the three files to the DGX out-of-band (scp/USB — never through the repo),
+then:
+
 ```bash
-sudo deploy/generate-self-signed-cert.sh one-forecast.twave.co.jp   # or install an internal-CA cert
+sudo deploy/install-tls-cert.sh star_twave_co_jp.crt "DigiCertCA 1.crt" newkey.pem
 sudo cp deploy/nginx-onefcst-docker.conf /etc/nginx/sites-available/onefcst
 sudo ln -sf /etc/nginx/sites-available/onefcst /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+The script refuses to install unless the key matches the certificate and the
+chain verifies against the supplied intermediate, writes the fullchain
+**leaf-first** (reversed order works in browsers and fails on older Android),
+and sets `0600` on the key. Verified locally 2026-07-30: TLSv1.3 handshake with
+SNI `one-forecast.twave.co.jp`, `Verify return code: 0 (ok)`, two certificates
+sent, all five security headers present.
+
+Renewal is the same command plus `--reload`.
 
 `ONEFCST_CORS_ORIGINS` is already set to `https://one-forecast.twave.co.jp` in the env
 example; `docker compose up -d` to apply.
