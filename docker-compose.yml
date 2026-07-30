@@ -70,7 +70,12 @@ services:
 
       # Read-only NAS sources, as seen INSIDE the container (see volumes).
       ONE_SOURCE_DIR: /mnt/nas/one
-      PLANNING_DIR: /mnt/nas/planning
+      # 企画部's ①②③④ drop lives INSIDE the ONE share, in ★販売計画（企画部）
+      # (confirmed 2026-07-30), so it needs no mount of its own — it is already
+      # under /mnt/nas/one. Overridable for the interim period while those four
+      # files still arrive by hand: point NAS_PLANNING_DIR at a host directory
+      # you upload into and set PLANNING_DIR back to /mnt/nas/planning.
+      PLANNING_DIR: ${PLANNING_DIR_IN_CONTAINER:-/mnt/nas/one/★販売計画（企画部）}
       SAP_DIR: /srv/sap
       # nas_sync.py is WSL/Windows-interop only and cannot run here; the
       # share is mounted on the host instead. Phase 5 adds an explicit
@@ -97,6 +102,8 @@ services:
       # passed straight through. Read-only at BOTH layers enforces the
       # Phase-1 rule that ONE source files are never written (CLAUDE.md #1).
       - ${NAS_ONE_DIR:-/mnt/nas/one}:/mnt/nas/one:ro
+      # Only used while planning files are still hand-uploaded rather than
+      # dropped in ★販売計画（企画部） on the share; harmless when unused.
       - ${NAS_PLANNING_DIR:-/mnt/nas/planning}:/mnt/nas/planning:ro
       # SAP cache is writable: ingestion mirrors the weekly ZM13/ZP21 drops
       # into subfolders under SAP_DIR. Same reasoning as the data dir above —

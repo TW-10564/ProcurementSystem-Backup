@@ -33,8 +33,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import (NAS_ZM13_CACHE, NAS_ZM13_UNC, NAS_ZP21_CACHE,
-                     NAS_ZP21_UNC, ONE_DIR)
+from .config import (NAS_PLAN_CACHE, NAS_PLAN_UNC, NAS_ZM13_CACHE,
+                     NAS_ZM13_UNC, NAS_ZP21_CACHE, NAS_ZP21_UNC, ONE_DIR)
 
 # The NAS root, as seen from the Windows side — Z:\ itself already IS the
 # ...\ONE folder (confirmed 2026-07-17: ONE計画.xlsm sits directly at
@@ -47,10 +47,21 @@ NAS_SOURCE_WIN = "Z:\\"
 # content-based discovery (sap_stock_history / sap_zp21 rglob SAP_DIR) picks
 # the files up from there, and both parsers de-dupe by date/week, so overlap
 # with older manually-placed copies is harmless.
-SAP_SYNC_SOURCES = [
+# "plan" is 企画部's ①②③④ drop (agreed 2026-07-30) — same mechanism, but its
+# destination is PLANNING_DIR itself rather than a subfolder, since
+# config.planning_file() globs that directory by circled-number prefix.
+# robocopy /XO never purges, so the hand-placed files already there survive
+# until the NAS copy is newer, and a folder that does not exist on the share
+# yet simply copies nothing.
+SUBFOLDER_SYNC_SOURCES = [
     ("zm13", NAS_ZM13_UNC, NAS_ZM13_CACHE),
     ("zp21", NAS_ZP21_UNC, NAS_ZP21_CACHE),
+    ("plan", NAS_PLAN_UNC, NAS_PLAN_CACHE),
 ]
+
+# Kept as an alias: the name shipped in the 2026-07-27 sync and reads as
+# SAP-only, which the planning entry above no longer is.
+SAP_SYNC_SOURCES = SUBFOLDER_SYNC_SOURCES
 
 
 def _to_windows_path(p: Path) -> str:
@@ -185,8 +196,11 @@ def refresh_from_nas(timeout_seconds: int = 180) -> dict:
                     except ValueError:
                         pass
 
+    # "sap_folders" keeps its name so existing rebuild reports stay comparable,
+    # even though it now also carries the "plan" count.
     return {"status": "ok", "one_dir": str(ONE_DIR), "files_in_cache": files_after,
-            "sap_folders": sap_counts}
+            "sap_folders": sap_counts,
+            "synced_folders": sap_counts}
 
 
 if __name__ == "__main__":

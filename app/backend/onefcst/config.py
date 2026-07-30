@@ -60,6 +60,17 @@ NAS_ZP21_UNC = os.environ.get(
 NAS_ZM13_CACHE = SAP_DIR / "週頭在庫_ZM13"
 NAS_ZP21_CACHE = SAP_DIR / "組込実績_ZP21"
 
+# 企画部's monthly ①②③④ sales-plan drop (agreed 2026-07-30). Until they start
+# using it these files arrive by hand, so the folder may not exist yet on the
+# share — nas_sync treats an unreachable subfolder as a no-op, keeping whatever
+# is already in PLANNING_DIR, rather than failing the rebuild. Mirrored INTO
+# PLANNING_DIR itself (not a subfolder) because planning_file() globs that
+# directory directly by ①②③④ prefix.
+NAS_PLAN_UNC = os.environ.get(
+    "ONEFCST_NAS_PLAN_UNC",
+    r"\\172.25.20.11\サードウェーブグループ\43上期\サードウェーブ\購買本部\【通常業務】\ONE\★販売計画（企画部）")
+NAS_PLAN_CACHE = PLANNING_DIR
+
 ONE_MASTER = ONE_DIR / "ONE計画.xlsm"
 NOTE_ONE_MASTER = ONE_DIR / "NoteONE計画.xlsm"
 NOTE_STOCK_PLAN = PLANNING_DIR / "ノート在庫使用計画_43期.xlsx"

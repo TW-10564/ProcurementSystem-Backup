@@ -54,7 +54,12 @@ Nothing here needs Entra, and each one removes a variable from the day itself.
       they are plainly on the share. Do not proceed past a mangled listing.
 - [ ] **1.8** Confirm the mount is **read-only** (`touch /mnt/nas/one/x` must
       fail) — CLAUDE.md constraint #1 depends on it.
-- [ ] **1.9** Same for the planning share, if it is separate.
+- [ ] **1.9** Confirm `★販売計画（企画部）` exists inside the ONE share and holds
+      the four ①②③④ workbooks. Until 企画部 starts dropping them there, set
+      `NAS_PLANNING_DIR` + `PLANNING_DIR_IN_CONTAINER` to a host directory you
+      upload into (see `deploy/compose.env.example`) — otherwise the first
+      rebuild resolves planning1/planning4 to nothing and Gate A drops to
+      master-only. Verify with `ls '/mnt/nas/one/★販売計画（企画部）'`.
 
 ## Phase 2 — the stack, without SSO (~2 h)
 
