@@ -167,9 +167,19 @@ def refresh_from_nas(timeout_seconds: int = 180) -> dict:
         ps_script += (
             f'$d = "{dw}"\n'
             f'New-Item -ItemType Directory -Force -Path $d | Out-Null\n'
-            f'robocopy "{unc}" $d /XO /R:1 /W:1 /NDL /NJH | Out-Null\n'
+            # /S — recurse into subfolders, skipping empty ones. Added
+            # 2026-07-30 the moment 企画部 created their structure:
+            # ★販売計画（企画部）/{デスクPlan,ノートPlan,Others/{Daily,Monthly,Weekly}}.
+            # Without it robocopy copies only the files sitting in the folder
+            # ROOT, so their entire upload would have synced as nothing at all,
+            # with exit code 0 and a healthy-looking report. The ZM13/ZP21
+            # folders are flat, so this changes nothing for them.
+            f'robocopy "{unc}" $d /S /XO /R:1 /W:1 /NDL /NJH | Out-Null\n'
             f'Write-Output "{tag.upper()}_RC=$LASTEXITCODE"\n'
-            f'Write-Output "{tag.upper()}_AFTER=$((Get-ChildItem $d -File | Measure-Object).Count)"\n'
+            # -Recurse so the count reflects the whole tree, not just the root:
+            # 企画部's folder is subfoldered, and a flat count reported "9"
+            # while their upload sat one level down, unseen.
+            f'Write-Output "{tag.upper()}_AFTER=$((Get-ChildItem $d -File -Recurse | Measure-Object).Count)"\n'
         )
     encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
 
