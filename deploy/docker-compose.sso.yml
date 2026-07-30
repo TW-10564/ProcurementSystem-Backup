@@ -38,7 +38,7 @@ services:
       - --reverse-proxy=true
       # we terminate TLS at nginx, so the cookie must still be marked secure
       - --cookie-secure=true
-      - --cookie-secret=${ENTRA_COOKIE_SECRET:?set ENTRA_COOKIE_SECRET — exactly 16/24/32 bytes: openssl rand -base64 32 | head -c 32}
+      - "--cookie-secret=${ENTRA_COOKIE_SECRET:?set ENTRA_COOKIE_SECRET — exactly 16, 24 or 32 bytes, from openssl rand -base64 32 then head -c 32}"
       - --cookie-expire=8h
       # everyone in the tenant who is ASSIGNED the app registration; Entra
       # enforces the assignment, so no email-domain allowlist is needed
@@ -54,8 +54,21 @@ services:
       # the same message as the secret; adding it afterwards means another
       # round-trip through them.
       - --scope=openid profile email groups
+      # No interstitial: an unauthenticated hit on the portal goes straight to
+      # Microsoft. Without it oauth2-proxy answers 403 with its own "Sign in
+      # with…" button page, which users read as the site being broken.
+      - --skip-provider-button=true
     environment:
       TZ: ${TZ:-Asia/Tokyo}
+      # The DGX reaches the internet only through the corporate proxy, and
+      # oauth2-proxy must reach login.microsoftonline.com for OIDC discovery
+      # at startup and for every token exchange. Leave these empty if the DGX
+      # has direct egress. NO_PROXY must keep internal hops direct — Go
+      # proxies ALL outbound requests otherwise, including nginx's
+      # auth_request callbacks and anything on the compose network.
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-${HTTP_PROXY:-}}
+      NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost},app,db,.twave.co.jp,172.16.0.0/12
     ports:
       - "127.0.0.1:4180:4180"
     healthcheck:

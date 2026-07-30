@@ -45,13 +45,17 @@ services:
       # trial has to be driven from a browser ON THIS MACHINE.
       - --redirect-url=${ENTRA_REDIRECT_URI:-http://localhost:4180/oauth2/callback}
       - --http-address=0.0.0.0:4180
-      - --cookie-secret=${ENTRA_COOKIE_SECRET:?generate one: openssl rand -base64 32 | head -c 32}
+      - "--cookie-secret=${ENTRA_COOKIE_SECRET:?generate one with openssl rand -base64 32 then head -c 32}"
       - --cookie-secure=false
       - --cookie-expire=8h
       - --email-domain=*
       - --set-xauthrequest=true
       - --pass-access-token=false
       - --scope=openid profile email groups
+      # Land on Microsoft, not on oauth2-proxy's own "Sign in with…" page.
+      # Without this, hitting / returns 403 with an interstitial button, which
+      # reads as a failure and is not one. With it, / is a 302 to Entra.
+      - --skip-provider-button=true
       # the app running natively on this host, outside docker
       - --upstream=http://host.docker.internal:8600
       # /health must stay reachable unauthenticated, same as in production
@@ -69,4 +73,10 @@ services:
       # the corporate proxy — oauth2-proxy must reach login.microsoftonline.com
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-${HTTP_PROXY:-}}
-      NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost,host.docker.internal}
+      # The upstream hop is subject to HTTP_PROXY too — Go's transport proxies
+      # every outbound request, including the one to the app on this host.
+      # host.docker.internal MUST therefore be exempt, and it is appended
+      # rather than defaulted: this shell already exports a NO_PROXY of
+      # "127.0.0.1,localhost,::1", which silently won the ${VAR:-default} and
+      # made /health 502 after a 30s timeout at proxy.twave.co.jp:8080.
+      NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost},host.docker.internal,172.17.0.1

@@ -57,11 +57,21 @@ else
 fi
 
 case "$REDIR" in
+  "")
+    # Correct for the LOCAL rig: docker-compose.sso.local.yml defaults to the
+    # localhost callback. Production must set it explicitly, hence the note.
+    REDIR="http://localhost:4180/oauth2/callback"
+    ok "ENTRA_REDIRECT_URI unset — local rig will default to $REDIR"
+    warn "on the DGX this MUST be set to the https production URI" ;;
   https://*/oauth2/callback) ok "ENTRA_REDIRECT_URI shape is right" ;;
-  http://*)  bad "ENTRA_REDIRECT_URI must be https" ;;
-  *)         bad "ENTRA_REDIRECT_URI should end in /oauth2/callback (got '${REDIR:-<empty>}')" ;;
+  http://localhost*/oauth2/callback|http://127.0.0.1*/oauth2/callback)
+    ok "ENTRA_REDIRECT_URI is the localhost dev callback" ;;
+  http://*)
+    bad "ENTRA_REDIRECT_URI must be https — Entra allows plain http only for
+       localhost/127.0.0.1, never a hostname or LAN IP" ;;
+  *) bad "ENTRA_REDIRECT_URI should end in /oauth2/callback (got '$REDIR')" ;;
 esac
-[ -n "$REDIR" ] && echo "       register EXACTLY this in Entra: $REDIR"
+echo "       register EXACTLY this in Entra: $REDIR"
 
 case "${#COOKIE}" in
   16|24|32) ok "ENTRA_COOKIE_SECRET length ${#COOKIE} accepted" ;;
