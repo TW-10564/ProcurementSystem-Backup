@@ -20,6 +20,7 @@ Operational runbooks live with the thing they operate, in `deploy/`:
 | Path | What |
 |---|---|
 | `deploy/README-docker.md` | Docker/Postgres deployment on the DGX |
+| [deploy/README-sso-golive.md](../deploy/README-sso-golive.md) — step-by-step first deployment of the Entra SSO build to the DGX, with the verification that isolates each failure mode
 | `deploy/README-cd.md` | Self-hosted runner + continuous deployment |
 | `deploy/README.md` | The older systemd/SQLite deployment — still the rollback path |
 
