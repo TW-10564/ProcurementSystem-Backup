@@ -136,23 +136,78 @@ The hostname is **`one-forecast.twave.co.jp`** (A record -> 172.16.5.106).
 It must match the DNS record, the TLS certificate and the Entra redirect URI
 exactly — a mismatch in any one of the three breaks sign-in.
 
-## 6. Entra ID SSO — after the platform team responds
+## 6. Entra ID SSO — MSAL in the SPA, no client secret
 
-Currently **not enabled**; the shared API key is the only authentication.
-When the tenant/client/secret arrive:
+**This replaced the oauth2-proxy design on 2026-07-30.** The SPA is a *public
+client*: MSAL does authorization-code + PKCE in the browser and sends the token
+as `Authorization: Bearer …`; the backend verifies it (`onefcst/api/entra.py`).
+No client secret exists anywhere — nothing to store, rotate, or have expire
+unnoticed. oauth2-proxy could not do this: it is a confidential client and
+refuses to start without a secret.
 
-1. Fill `ENTRA_*` in `.env` (including `ENTRA_COOKIE_SECRET`).
-2. `docker compose -f docker-compose.yml -f deploy/docker-compose.sso.yml up -d`
-3. Confirm `curl -s http://127.0.0.1:4180/ping` answers **before** touching nginx.
-4. Uncomment the `auth_request` block and `/oauth2/` locations in
-   `/etc/nginx/sites-available/onefcst`, then `nginx -t && systemctl reload nginx`.
+```
+Browser ──MSAL/PKCE──> Entra ID          (no secret; tenant+client id only)
+   │  Authorization: Bearer <jwt>
+   ▼
+nginx ──> FastAPI ──verifies──> tenant's public signing keys (JWKS)
+```
 
-Keep `ONEFCST_API_KEY` set afterwards — it still guards the API against
-anything on the internal network that reaches port 8600 directly.
+**In Entra** (once per environment, and the only manual step):
 
-**SSO authenticates; it does not yet authorize.** The app has no user or
-role model — the Entra role claim arrives as `X-Forwarded-Roles` and nothing
-reads it. Per-department permissions are follow-on work.
+1. App registration → Authentication → add a **Single-page application**
+   platform with redirect URI `https://one-forecast.twave.co.jp` — the SPA
+   platform, *not* Web. A Web-platform URI demands a client secret at token
+   exchange and sign-in fails with `AADSTS7000218`.
+2. Enterprise application → Properties → **Assignment required = Yes**, then
+   assign the procurement/planning staff (or a group). This is what restricts
+   who may sign in; Entra refuses everyone else at its own login page.
+3. Optional but preferred: Expose an API → add scope `access_as_user`, then set
+   `VITE_ENTRA_API_SCOPE=api://<client-id>/access_as_user`. The backend already
+   accepts that audience, so this needs no server change.
+
+**In the env files:**
+
+```bash
+# /srv/onefcst/.env  — backend verification (public values only)
+ONEFCST_ENTRA_TENANT_ID=<directory (tenant) id>
+ONEFCST_ENTRA_CLIENT_ID=<application (client) id>
+ONEFCST_ENTRA_ALLOW_API_KEY=1     # 0 = a Microsoft identity is the ONLY way in
+# ONEFCST_ENTRA_ALLOWED_GROUPS=<group object id>,…   # optional second gate
+```
+
+The frontend needs the same two ids as `VITE_ENTRA_TENANT_ID` /
+`VITE_ENTRA_CLIENT_ID` **at build time** — so changing them means
+`docker compose build`, not just a restart (same trap as `VITE_API_KEY`).
+
+Verify, in this order:
+
+```bash
+curl -s http://127.0.0.1:8600/auth/config | jq   # enabled:true, ids as expected
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8600/items   # 401
+```
+
+`/auth/config` is public on purpose: it reports what the *running process*
+believes, which is the fastest way to catch an env file that was edited but
+never loaded. It contains only the tenant/client ids and booleans.
+
+Then sign in from a browser and check `/me` — it must report
+`source: "entra"` and your address. If it says `api-key`, the browser is not
+sending a token and every write would be attributed anonymously.
+
+Keep `ONEFCST_API_KEY` set: with `ONEFCST_ENTRA_ALLOW_API_KEY=1` it still lets
+scripted callers (monitoring, exports) in without an interactive sign-in. It is
+not a browser bypass — build the SPA **without** `VITE_API_KEY` once SSO is on,
+so no key is shipped to any browser.
+
+**SSO authenticates; it does not yet authorize.** Every signed-in user can
+still call every endpoint, including `POST /build/rebuild`. `Identity.groups`
+and `.roles` are populated ready for it — see
+`docs/SSO_TO_GOLIVE_TASKS.md` phase 4.
+
+> `deploy/docker-compose.sso.yml` (oauth2-proxy) is kept as a fallback for the
+> case where the platform team will only issue a Web-platform registration. It
+> needs `ENTRA_CLIENT_SECRET` and the nginx `auth_request` block; do not run
+> both designs at once.
 
 ---
 

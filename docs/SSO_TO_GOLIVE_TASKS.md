@@ -120,27 +120,36 @@ easier to debug than doing both at once.
       permissions (phase 4) come later.
 - [ ] **3.1** Confirm the DNS rename landed and the cert matches the corrected
       spelling. The Entra redirect URI must match **exactly**, including scheme.
-- [ ] **3.2** Fill the `ENTRA_*` block in `/srv/onefcst/.env` — the slots are
-      already named and documented in `deploy/compose.env.example`. Tenant and
-      client ID received 2026-07-30; only the **secret** is outstanding.
-      Generate the cookie secret yourself:
-      `openssl rand -base64 32 | head -c 32`. Then validate before starting
-      anything: `deploy/check-sso-config.sh /srv/onefcst/.env` — it catches a
-      swapped GUID, the Secret **ID** pasted instead of the **Value**, a wrong
-      cookie length, and a malformed redirect URI, and it confirms issuer
-      discovery actually resolves for that tenant.
-- [ ] **3.3** Start the overlay:
-      `docker compose --env-file /srv/onefcst/.env -p onefcst -f docker-compose.yml -f deploy/docker-compose.sso.yml up -d`.
-      Check oauth2-proxy's own logs before touching nginx — a bad client secret
-      is obvious there and invisible from nginx.
-- [ ] **3.4** Uncomment the `auth_request` lines and the `/oauth2/` blocks in
-      the nginx config, `nginx -t`, reload. Note the warning already in that
-      file: uncommenting before oauth2-proxy is up makes **every** request 500.
+> **Architecture changed 2026-07-30: MSAL in the SPA, not oauth2-proxy.**
+> The app is a *public client* doing PKCE in the browser, so there is **no
+> client secret** — the reason for the switch. oauth2-proxy is a confidential
+> client and refuses to start without one. Implementation: `src/auth/msal.ts`,
+> `src/auth/AuthGate.tsx`, `onefcst/api/entra.py`; 38 tests in
+> `tests/test_entra_auth.py` + `tests/test_entra_gate.py`.
+
+- [ ] **3.2** In Entra, add a **Single-page application** platform whose
+      redirect URI is `https://one-forecast.twave.co.jp`. It must be the SPA
+      platform, not Web: a Web-platform URI requires a secret at token exchange
+      and sign-in dies with `AADSTS7000218`.
+- [ ] **3.3** Set the two public ids in both places — `ONEFCST_ENTRA_TENANT_ID`
+      / `ONEFCST_ENTRA_CLIENT_ID` in `/srv/onefcst/.env` for verification, and
+      `VITE_ENTRA_TENANT_ID` / `VITE_ENTRA_CLIENT_ID` for the bundle. The VITE
+      pair is compiled in, so changing them needs `docker compose build`, not a
+      restart. Confirm what the running process actually loaded:
+      `curl -s http://127.0.0.1:8600/auth/config | jq`.
+- [ ] **3.4** Build the SPA **without** `VITE_API_KEY`. This is the step that
+      closes audit finding F1: while the key is in the bundle, anyone who can
+      load the page holds it and SSO is decoration. Set
+      `ONEFCST_ENTRA_ALLOW_API_KEY=0` if no scripted caller needs the key.
 - [ ] **3.5** Sign in as yourself from a clean browser profile. Verify the
-      redirect, the callback, and that a signed-out session cannot reach `/`.
-- [ ] **3.6** Verify `X-Forwarded-Email` / `X-Forwarded-Groups` actually arrive
-      at the app (log them once, temporarily). Everything in phase 4 depends on
-      the claim names being what you expect.
+      automatic redirect (no button), and that `/items` is 401 without a token.
+- [ ] **3.6** Check `GET /me` reports `source: "entra"` and your address. If it
+      says `api-key`, the browser is not sending a token and every write will be
+      attributed anonymously — phase 4 depends on this being right.
+- [ ] **3.6b** Preferred hardening: Entra → Expose an API → scope
+      `access_as_user`, then set `VITE_ENTRA_API_SCOPE=api://<client-id>/access_as_user`
+      so the browser sends a purpose-built **access** token rather than an ID
+      token. The backend already accepts that audience — no server change.
 - [ ] **3.7** Test with a second real user from procurement, not just yourself.
 - [ ] **3.8** Confirm `/health` still answers unauthenticated (container
       healthcheck and any monitoring depend on it).

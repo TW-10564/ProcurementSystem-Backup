@@ -11,6 +11,13 @@ pydantic==2.12.5
 # default) needs no extra driver. Safe to always install.
 psycopg[binary]==3.2.3
 
+# Entra ID (Microsoft SSO) token verification — api/entra.py. The [crypto]
+# extra pulls in `cryptography`, which is what actually checks the RS256
+# signature; without it PyJWT silently supports only HMAC algorithms and
+# every real Entra token would be rejected. Required whenever
+# ONEFCST_ENTRA_TENANT_ID is set; harmless otherwise.
+pyjwt[crypto]==2.10.1
+
 # NOT a pip package: ingestion/sap.py's live SAP source (SAP在庫抽出.accdb,
 # an Access DB) is read via the `mdb-export` CLI tool, system-installed:
 #   sudo apt-get install -y mdbtools

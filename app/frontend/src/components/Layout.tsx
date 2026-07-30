@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useLang } from "../i18n/LanguageContext";
+import SignedInUser from "../auth/SignedInUser";
+import { signOut, ssoEnabled } from "../auth/msal";
 import type { TranslationKey } from "../i18n/translations";
 import {
   AccuracyIcon,
@@ -75,6 +77,7 @@ export default function Layout() {
           </Link>
         </div>
         <div className="header-right">
+          <SignedInUser />
           <div className="lang-toggle">
             <button className={lang === "ja" ? "on" : ""} onClick={() => setLang("ja")}>
               日本語
@@ -83,7 +86,14 @@ export default function Layout() {
               EN
             </button>
           </div>
-          <button className="logout-btn" onClick={() => navigate("/")}>
+          {/* With SSO on, "logout" must end the MICROSOFT session too.
+              Navigating to "/" alone would leave the Entra cookie in place, so
+              the next visit signs the same person straight back in without a
+              prompt — which on a shared PC is the opposite of logging out. */}
+          <button
+            className="logout-btn"
+            onClick={() => (ssoEnabled ? void signOut() : navigate("/"))}
+          >
             <LogoutIcon className="logout-icon" />
             {t("logout")}
           </button>

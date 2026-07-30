@@ -149,6 +149,46 @@ LLM_TIMEOUT = float(os.environ.get("ONEFCST_LLM_TIMEOUT", "120"))
 # the same value in every request's X-API-Key header.
 API_KEY = os.environ.get("ONEFCST_API_KEY", "")
 
+# --- Entra ID (Microsoft SSO) -----------------------------------------------
+# Set BOTH of these to require a real Microsoft identity on every request (see
+# api/entra.py). Unset = the API_KEY gate above is the only auth, which is the
+# dev default and the pre-SSO deployed state.
+#
+# The SPA is a PUBLIC client: it does the code+PKCE exchange in the browser via
+# MSAL and sends the resulting token as `Authorization: Bearer …`. That is why
+# no client secret appears anywhere in this file or in the environment — there
+# isn't one to leak. This backend's whole job is to VERIFY the token, which
+# needs only public information: the tenant's published signing keys.
+ENTRA_TENANT_ID = os.environ.get("ONEFCST_ENTRA_TENANT_ID", "")
+ENTRA_CLIENT_ID = os.environ.get("ONEFCST_ENTRA_CLIENT_ID", "")
+
+# Expected `aud` claim. Defaults to the client ID, which is what an ID token
+# carries when the SPA and this API are the same app registration — the setup
+# that needs NO extra Entra configuration. If the registration later exposes an
+# API scope (Entra -> Expose an API -> api://<client-id>/access_as_user), set
+# this to that api:// URI and the access token is used instead. Preferred where
+# possible: access tokens are the credential actually intended for calling an
+# API, whereas an ID token is intended to describe a sign-in.
+ENTRA_AUDIENCE = os.environ.get("ONEFCST_ENTRA_AUDIENCE", "") or ENTRA_CLIENT_ID
+
+# When Entra is on, should the shared API key still be accepted? Kept true by
+# default so scripted callers (monitoring, curl, the export cron) keep working
+# without acquiring a token. Set to 0 to make a Microsoft identity the ONLY way
+# in. Note this is not a browser bypass: once SSO is on, the frontend is built
+# WITHOUT VITE_API_KEY, so no key is shipped to any browser.
+ENTRA_ALLOW_API_KEY = os.environ.get("ONEFCST_ENTRA_ALLOW_API_KEY", "1") not in (
+    "0", "false", "False", "no", "")
+
+# Optional second gate, on top of Entra's own "assignment required": only these
+# groups/roles may call the API. Comma-separated group object IDs (the `groups`
+# claim) or app-role values (the `roles` claim). Empty = anyone Entra lets sign
+# in, which is the right default when app assignment is already restricted to
+# the named staff.
+ENTRA_ALLOWED_GROUPS = [g.strip() for g in os.environ.get(
+    "ONEFCST_ENTRA_ALLOWED_GROUPS", "").split(",") if g.strip()]
+
+ENTRA_ENABLED = bool(ENTRA_TENANT_ID and ENTRA_CLIENT_ID)
+
 # --- rate limiting ----------------------------------------------------------
 # Basic per-client request cap (see api/rate_limit.py) — added 2026-07-23 as
 # the cheapest defense against a leaked/guessed ONEFCST_API_KEY being

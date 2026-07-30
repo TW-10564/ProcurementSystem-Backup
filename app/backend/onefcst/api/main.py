@@ -12,11 +12,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from .. import config
 from .. import scheduler as scheduler_mod
 from ..config import CORS_ORIGINS
 from ..db import get_session
@@ -27,7 +28,7 @@ from ..advisory import adjustments as adj_svc
 from ..advisory import notifications as notif_svc
 from ..advisory import discontinuation_review as discontinuation_svc
 from ..advisory import order_actions as order_svc
-from .auth import require_api_key
+from .auth import require_identity
 from .rate_limit import RateLimitMiddleware
 from .schemas import (CompatRuleOut, ConfirmRequest, RejectRequest,
                       EditRuleRequest, AdjustmentIn, AdjustmentOut,
@@ -46,7 +47,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="onefcst — Forecasting & Procurement Decision Support",
              description="Phase-1 advisory API. Read-only against all NAS "
              "sources; writes only to this app's own database.",
-             lifespan=lifespan, dependencies=[Depends(require_api_key)])
+             lifespan=lifespan, dependencies=[Depends(require_identity)])
 
 # Rate limiting added BEFORE CORS below — Starlette applies middleware in
 # reverse of add order (last added = outermost), and CORS should stay
@@ -114,6 +115,52 @@ async def trigger_rebuild():
     entry = rebuild_status_mod.start("manual")
     asyncio.create_task(_run_rebuild_in_background(entry))
     return {"status": "started"}
+
+
+@app.get("/auth/config")
+def auth_config():
+    """What this server expects of a sign-in. Public, and deliberately so.
+
+    Every value here is already public by design: a tenant id and a client id
+    are visible in the browser's address bar during any OIDC redirect, and the
+    audience/issuer are derived from them. Nothing here authenticates anyone.
+
+    Exposing it means an operator can ask the running server what it believes,
+    rather than inferring it from an env file that may not be the one this
+    process loaded — the exact confusion that cost us an afternoon when a
+    stale .env was still in memory after an edit.
+    """
+    from . import entra
+    cfg = entra.describe_config()
+    # Only ever a boolean: whether a shared key exists, never the key.
+    cfg["api_key_required"] = bool(config.API_KEY)
+    cfg["api_key_accepted"] = bool(config.API_KEY) and (
+        not cfg["enabled"] or config.ENTRA_ALLOW_API_KEY)
+    return cfg
+
+
+@app.get("/me")
+def whoami(request: Request):
+    """The identity this server sees for the current request.
+
+    The frontend shows this as the signed-in employee, and it is the first
+    thing to check when sign-in "works" but writes are attributed wrongly:
+    if `source` is `api-key` then the browser is NOT sending a token and the
+    audit trail will be anonymous.
+    """
+    ident = getattr(request.state, "identity", None)
+    if ident is None:
+        return {"authenticated": False, "source": "api-key" if config.API_KEY else "open"}
+    return {
+        "authenticated": True,
+        "source": "entra",
+        "name": ident.name,
+        "email": ident.email,
+        "oid": ident.oid,
+        "groups": list(ident.groups),
+        "roles": list(ident.roles),
+        "audit_author": ident.audit_author,
+    }
 
 
 @app.get("/maintenance")

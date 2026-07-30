@@ -190,6 +190,32 @@ app/
       i18n/                ja/en translations
 ```
 
+### Authentication — Entra ID SSO via MSAL (no client secret)
+
+Set `ONEFCST_ENTRA_TENANT_ID` + `ONEFCST_ENTRA_CLIENT_ID` and every request
+must carry a Microsoft token; leave them unset and the shared-key gate below
+is the only auth (the dev default). The SPA is a **public client**: MSAL runs
+PKCE in the browser (`src/auth/msal.ts`, `src/auth/AuthGate.tsx`) and the
+backend only *verifies* (`api/entra.py` — RS256 against the tenant JWKS, plus
+aud/iss/tid/exp). There is no client secret in this design, which is why it
+replaced the oauth2-proxy overlay on 2026-07-30: oauth2-proxy is a
+confidential client and will not start without one.
+
+Things that bite:
+- The Entra redirect URI must be registered under the **Single-page
+  application** platform, not Web. A Web URI demands a secret at token
+  exchange (`AADSTS7000218`).
+- Who *may* sign in is Entra app assignment, not app code. Who may *do what*
+  is not implemented — `Identity.groups`/`.roles` are populated and unread
+  (phase 4 in `docs/SSO_TO_GOLIVE_TASKS.md`).
+- `VITE_ENTRA_*` is compiled into the bundle, so changing it needs a rebuild.
+- `GET /auth/config` (public — ids and booleans only) reports what the
+  *running process* loaded; `GET /me` reports the caller's identity. If `/me`
+  says `source: "api-key"` the browser is not sending a token and writes are
+  attributed anonymously.
+- Never widen `algorithms=["RS256"]` in `entra.py`. Accepting `none` or an
+  HMAC alg makes every token forgeable; `tests/test_entra_auth.py` covers both.
+
 **Key API routes** (`app/backend/onefcst/api/main.py`): `/items`, `/forecasts/run`
 (POST), `/forecasts/summary`, `/forecasts` (list), `/forecasts/{item_id}` (detail),
 `/forecasts/order-suggestions`, `/compat-rules` (+confirm/reject/bulk-confirm/draft-llm),

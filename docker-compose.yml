@@ -51,6 +51,11 @@ services:
         VITE_API_BASE: ${VITE_API_BASE:-/api}
         # baked into the JS bundle at build time — see Dockerfile
         VITE_API_KEY: ${ONEFCST_API_KEY:-}
+        # Entra SSO. Public ids, safe to bake in; no client secret exists in
+        # this flow. Both empty = pre-SSO bundle. Changing them needs a REBUILD.
+        VITE_ENTRA_TENANT_ID: ${ONEFCST_ENTRA_TENANT_ID:-}
+        VITE_ENTRA_CLIENT_ID: ${ONEFCST_ENTRA_CLIENT_ID:-}
+        VITE_ENTRA_API_SCOPE: ${VITE_ENTRA_API_SCOPE:-}
     # Named explicitly rather than derived from the project/directory name, so
     # the CD workflow can roll back by re-tagging a known image
     # (.github/workflows/deploy.yml).
@@ -67,6 +72,19 @@ services:
       ONEFCST_API_KEY: ${ONEFCST_API_KEY:?set ONEFCST_API_KEY in .env}
       ONEFCST_CORS_ORIGINS: ${ONEFCST_CORS_ORIGINS:-}
       ONEFCST_RATE_LIMIT_PER_MINUTE: ${ONEFCST_RATE_LIMIT_PER_MINUTE:-120}
+
+      # Entra ID SSO — set both to require a Microsoft identity on every
+      # request (api/entra.py verifies the token; it holds no credential of
+      # its own). Deliberately the SAME values as the VITE_* build args above:
+      # the bundle and the verifier must agree, and a mismatch shows up as
+      # "token was not issued for this application".
+      ONEFCST_ENTRA_TENANT_ID: ${ONEFCST_ENTRA_TENANT_ID:-}
+      ONEFCST_ENTRA_CLIENT_ID: ${ONEFCST_ENTRA_CLIENT_ID:-}
+      ONEFCST_ENTRA_AUDIENCE: ${ONEFCST_ENTRA_AUDIENCE:-}
+      # 1 keeps the shared key working for scripted callers; 0 makes a
+      # Microsoft sign-in the only way in.
+      ONEFCST_ENTRA_ALLOW_API_KEY: ${ONEFCST_ENTRA_ALLOW_API_KEY:-1}
+      ONEFCST_ENTRA_ALLOWED_GROUPS: ${ONEFCST_ENTRA_ALLOWED_GROUPS:-}
 
       # Read-only NAS sources, as seen INSIDE the container (see volumes).
       ONE_SOURCE_DIR: /mnt/nas/one

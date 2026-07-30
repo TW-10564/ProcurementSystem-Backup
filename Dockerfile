@@ -26,8 +26,19 @@ COPY app/frontend/ ./
 # caveat as deploy/frontend.env.production.example.
 ARG VITE_API_BASE=/api
 ARG VITE_API_KEY=
+# Entra ID SSO. Both ids are PUBLIC — they appear in the browser's address bar
+# during sign-in — so compiling them in is fine, unlike VITE_API_KEY above.
+# There is no client secret: the SPA is a public client using PKCE
+# (app/frontend/src/auth/msal.ts). Setting both switches SSO on; leaving them
+# empty builds the pre-SSO bundle.
+ARG VITE_ENTRA_TENANT_ID=
+ARG VITE_ENTRA_CLIENT_ID=
+ARG VITE_ENTRA_API_SCOPE=
 ENV VITE_API_BASE=${VITE_API_BASE} \
-    VITE_API_KEY=${VITE_API_KEY}
+    VITE_API_KEY=${VITE_API_KEY} \
+    VITE_ENTRA_TENANT_ID=${VITE_ENTRA_TENANT_ID} \
+    VITE_ENTRA_CLIENT_ID=${VITE_ENTRA_CLIENT_ID} \
+    VITE_ENTRA_API_SCOPE=${VITE_ENTRA_API_SCOPE}
 RUN npm run build
 
 

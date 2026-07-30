@@ -1,4 +1,5 @@
 import axios from "axios";
+import { acquireApiToken } from "../auth/msal";
 import type {
   Adjustment,
   BacktestReport,
@@ -33,6 +34,23 @@ const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
 const http = axios.create({
   baseURL: BASE_URL,
   headers: API_KEY ? { "X-API-Key": API_KEY } : undefined,
+});
+
+/**
+ * Attach the Microsoft token to every request.
+ *
+ * Per-request rather than once at creation because tokens expire: MSAL hands
+ * back a cached one until it is close to expiry and then silently renews. A
+ * token captured once at startup would work for an hour and then 401 for the
+ * rest of the session — the kind of bug that only shows up after lunch.
+ *
+ * A no-op when SSO is off (acquireApiToken returns null), so the pre-SSO
+ * shared-key path is byte-for-byte unchanged.
+ */
+http.interceptors.request.use(async (cfg) => {
+  const token = await acquireApiToken();
+  if (token) cfg.headers.Authorization = `Bearer ${token}`;
+  return cfg;
 });
 
 /**

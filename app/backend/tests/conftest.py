@@ -28,9 +28,22 @@ TEST_DATABASE_URL = os.environ.get("ONEFCST_TEST_DATABASE_URL", "")
 
 @pytest.fixture(autouse=True)
 def _no_env_auth(monkeypatch):
+    """Neutralise every auth mechanism the developer's .env might switch on.
+
+    The suite must test the code, not the machine it runs on. Turning on SSO in
+    app/backend/.env immediately failed 10 endpoint tests that (correctly) send
+    no token — a false alarm that would otherwise land in CI as a mystery, and
+    worse, would tempt someone to "fix" it by loosening the gate.
+
+    Tests that want a mechanism ON opt in by setting it themselves
+    (tests/test_entra_gate.py's `sso_on`); those fixtures run after this one.
+    """
     monkeypatch.setattr(auth_mod, "API_KEY", "")
     monkeypatch.setattr(config, "API_KEY", "")
     monkeypatch.setattr(rate_limit_mod, "RATE_LIMIT_PER_MINUTE", 0)
+    monkeypatch.setattr(config, "ENTRA_TENANT_ID", "")
+    monkeypatch.setattr(config, "ENTRA_CLIENT_ID", "")
+    monkeypatch.setattr(config, "ENTRA_ALLOWED_GROUPS", [])
 
 
 @pytest.fixture(autouse=True, scope="session")
