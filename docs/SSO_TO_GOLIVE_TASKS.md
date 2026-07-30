@@ -107,6 +107,17 @@ easier to debug than doing both at once.
 
 ## Phase 3 — SSO (~3–4 h once the values are in hand)
 
+- [ ] **3.0** **Restrict who can sign in — this is done in Entra, not in the
+      app.** By default every account in the tenant can authenticate. In the
+      app registration → *Enterprise application* → *Properties*, set
+      **Assignment required = Yes**, then under *Users and groups* assign only
+      the procurement/planning staff who will use the portal (a security group
+      is easier to maintain than named individuals). Anyone unassigned is
+      refused **by Microsoft**, at the login page, before oauth2-proxy or the
+      app sees anything — which is why `--email-domain=*` in the overlay is
+      not a hole: Entra has already filtered. Nothing in this repo needs to
+      change for it, and it is worth doing on day one even though per-role
+      permissions (phase 4) come later.
 - [ ] **3.1** Confirm the DNS rename landed and the cert matches the corrected
       spelling. The Entra redirect URI must match **exactly**, including scheme.
 - [ ] **3.2** Fill the `ENTRA_*` block in `/srv/onefcst/.env` — the slots are
