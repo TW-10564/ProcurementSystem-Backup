@@ -2,13 +2,15 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 import type { DiscontinuationReport, DiscontinuationSuggestion } from "../api/types";
+import { authorIsSelfAsserted, currentAuthor } from "../auth/author";
 
 const AUTHOR_KEY = "onefcst_author";
 
 function useAuthor() {
-  const [author, setAuthor] = useState(
-    () => localStorage.getItem(AUTHOR_KEY) ?? "",
-  );
+  // Under SSO the signed-in address is authoritative and the server enforces
+  // it regardless of what we send (api/auth.py:effective_author). The typed
+  // name survives only for the no-SSO case.
+  const [author, setAuthor] = useState(() => currentAuthor());
   const update = (v: string) => {
     setAuthor(v);
     localStorage.setItem(AUTHOR_KEY, v);
@@ -117,13 +119,26 @@ function ReviewQueue() {
           <span className="avatar" title={t("common_author_label")}>
             {author ? author.slice(0, 2).toUpperCase() : "？"}
           </span>
-          <input
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-            placeholder={t("compat_author_placeholder")}
-            aria-label={t("common_author_label")}
-            style={{ width: 180 }}
-          />
+          {/* Editable only when nobody has signed in — under SSO the server
+              takes the author from the verified token and ignores this value. */}
+          {authorIsSelfAsserted() ? (
+            <input
+              value={author}
+              onChange={(e) => setAuthor(e.target.value)}
+              placeholder={t("compat_author_placeholder")}
+              aria-label={t("common_author_label")}
+              style={{ width: 180 }}
+            />
+          ) : (
+            <span
+              title={t("common_author_label")}
+              style={{ fontSize: "0.8rem", color: "#475569", maxWidth: 200,
+                       overflow: "hidden", textOverflow: "ellipsis",
+                       whiteSpace: "nowrap" }}
+            >
+              {author}
+            </span>
+          )}
         </div>
       </div>
 

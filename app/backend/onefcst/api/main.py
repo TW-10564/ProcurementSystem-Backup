@@ -28,7 +28,7 @@ from ..advisory import adjustments as adj_svc
 from ..advisory import notifications as notif_svc
 from ..advisory import discontinuation_review as discontinuation_svc
 from ..advisory import order_actions as order_svc
-from .auth import require_identity
+from .auth import effective_author, require_identity
 from .rate_limit import RateLimitMiddleware
 from .schemas import (CompatRuleOut, ConfirmRequest, RejectRequest,
                       EditRuleRequest, AdjustmentIn, AdjustmentOut,
@@ -172,14 +172,20 @@ def get_maintenance():
 
 
 @app.post("/maintenance")
-def set_maintenance(body: dict):
+def set_maintenance(request: Request, body: dict):
     """Toggle the site-wide notice. Requires the API key like every other
-    write. Takes effect on every client within one poll (~20s), no restart."""
+    write. Takes effect on every client within one poll (~20s), no restart.
+
+    `by` comes from the verified identity when there is one. Maintenance mode
+    is the flag that means "a person deliberately closed the site" (policy
+    2026-07-30), so the record of WHICH person is the whole point of the field
+    — it defaulted to the literal "portal" before.
+    """
     from .. import maintenance
     state = maintenance.set_state(
         bool(body.get("enabled")),
         str(body.get("message") or ""),
-        by=str(body.get("by") or "portal"),
+        by=effective_author(request, str(body.get("by") or "")) or "portal",
     )
     return state
 
@@ -211,9 +217,9 @@ def get_compat_rules(status: str | None = None, min_confidence: float | None = N
 
 
 @app.post("/compat-rules/{rule_id}/confirm", response_model=CompatRuleOut)
-def confirm_compat_rule(rule_id: int, body: ConfirmRequest, session: Session = Depends(db)):
+def confirm_compat_rule(request: Request, rule_id: int, body: ConfirmRequest, session: Session = Depends(db)):
     try:
-        r = rules_svc.confirm_rule(session, rule_id, body.author)
+        r = rules_svc.confirm_rule(session, rule_id, effective_author(request, body.author))
     except rules_svc.RuleNotFound as e:
         raise HTTPException(404, str(e))
     items = {i.id: i.canonical_name for i in session.query(Item).all()}
@@ -224,9 +230,9 @@ def confirm_compat_rule(rule_id: int, body: ConfirmRequest, session: Session = D
 
 
 @app.post("/compat-rules/{rule_id}/reject", response_model=CompatRuleOut)
-def reject_compat_rule(rule_id: int, body: RejectRequest, session: Session = Depends(db)):
+def reject_compat_rule(request: Request, rule_id: int, body: RejectRequest, session: Session = Depends(db)):
     try:
-        r = rules_svc.reject_rule(session, rule_id, body.author, body.reason)
+        r = rules_svc.reject_rule(session, rule_id, effective_author(request, body.author), body.reason)
     except rules_svc.RuleNotFound as e:
         raise HTTPException(404, str(e))
     items = {i.id: i.canonical_name for i in session.query(Item).all()}
@@ -237,14 +243,14 @@ def reject_compat_rule(rule_id: int, body: RejectRequest, session: Session = Dep
 
 
 @app.patch("/compat-rules/{rule_id}", response_model=CompatRuleOut)
-def edit_compat_rule(rule_id: int, body: EditRuleRequest, session: Session = Depends(db)):
+def edit_compat_rule(request: Request, rule_id: int, body: EditRuleRequest, session: Session = Depends(db)):
     """Correct a draft rule's own judgement (confidence/relation/note)
     before deciding confirm/reject — e.g. the AI got the confidence wrong,
     or a reviewer wants to record their own reasoning. Only allowed on
     status='draft' rules; a confirmed/rejected rule is a settled decision
     (see advisory/rules.py::edit_rule's docstring)."""
     try:
-        r = rules_svc.edit_rule(session, rule_id, body.author, relation=body.relation,
+        r = rules_svc.edit_rule(session, rule_id, effective_author(request, body.author), relation=body.relation,
                                 confidence=body.confidence, note=body.note)
     except rules_svc.RuleNotFound as e:
         raise HTTPException(404, str(e))
@@ -282,10 +288,10 @@ def get_discontinuation_suggestions(status: str | None = None, limit: int = 500,
 
 @app.post("/discontinuation-suggestions/{suggestion_id}/confirm",
          response_model=DiscontinuationSuggestionOut)
-def confirm_discontinuation(suggestion_id: int, body: ConfirmRequest,
+def confirm_discontinuation(request: Request, suggestion_id: int, body: ConfirmRequest,
                             session: Session = Depends(db)):
     try:
-        s = discontinuation_svc.confirm_suggestion(session, suggestion_id, body.author)
+        s = discontinuation_svc.confirm_suggestion(session, suggestion_id, effective_author(request, body.author))
     except discontinuation_svc.SuggestionNotFound as e:
         raise HTTPException(404, str(e))
     except discontinuation_svc.SuggestionNotEditable as e:
@@ -295,10 +301,10 @@ def confirm_discontinuation(suggestion_id: int, body: ConfirmRequest,
 
 @app.post("/discontinuation-suggestions/{suggestion_id}/reject",
          response_model=DiscontinuationSuggestionOut)
-def reject_discontinuation(suggestion_id: int, body: RejectRequest,
+def reject_discontinuation(request: Request, suggestion_id: int, body: RejectRequest,
                            session: Session = Depends(db)):
     try:
-        s = discontinuation_svc.reject_suggestion(session, suggestion_id, body.author, body.reason)
+        s = discontinuation_svc.reject_suggestion(session, suggestion_id, effective_author(request, body.author), body.reason)
     except discontinuation_svc.SuggestionNotFound as e:
         raise HTTPException(404, str(e))
     except discontinuation_svc.SuggestionNotEditable as e:
@@ -308,25 +314,25 @@ def reject_discontinuation(suggestion_id: int, body: RejectRequest,
 
 # ------------------------------------------------------------ order actions
 @app.post("/order-actions/{item_id}/mark-ordered", response_model=OrderActionOut)
-def mark_ordered(item_id: int, body: MarkOrderedRequest, session: Session = Depends(db)):
+def mark_ordered(request: Request, item_id: int, body: MarkOrderedRequest, session: Session = Depends(db)):
     item = session.get(Item, item_id)
     if item is None:
         raise HTTPException(404, f"item {item_id} not found")
     try:
         oa = order_svc.mark_ordered(session, item, qty_ordered=body.qty_ordered,
                                     expected_arrival_date=body.expected_arrival_date,
-                                    note=body.note, author=body.author)
+                                    note=body.note, author=effective_author(request, body.author))
     except order_svc.OrderActionAlreadyActive as e:
         raise HTTPException(409, str(e))
     return oa
 
 
 @app.post("/order-actions/{order_action_id}/extend", response_model=OrderActionOut)
-def extend_order_action(order_action_id: int, body: ExtendDateRequest,
+def extend_order_action(request: Request, order_action_id: int, body: ExtendDateRequest,
                         session: Session = Depends(db)):
     try:
         oa = order_svc.extend_expected_date(session, order_action_id,
-                                            body.expected_arrival_date, body.author)
+                                            body.expected_arrival_date, effective_author(request, body.author))
     except order_svc.OrderActionNotFound as e:
         raise HTTPException(404, str(e))
     except order_svc.OrderActionNotActive as e:
@@ -335,10 +341,10 @@ def extend_order_action(order_action_id: int, body: ExtendDateRequest,
 
 
 @app.post("/order-actions/{order_action_id}/confirm-received", response_model=OrderActionOut)
-def confirm_order_received(order_action_id: int, body: ConfirmRequest,
+def confirm_order_received(request: Request, order_action_id: int, body: ConfirmRequest,
                            session: Session = Depends(db)):
     try:
-        oa = order_svc.confirm_received(session, order_action_id, body.author)
+        oa = order_svc.confirm_received(session, order_action_id, effective_author(request, body.author))
     except order_svc.OrderActionNotFound as e:
         raise HTTPException(404, str(e))
     except order_svc.OrderActionNotActive as e:
@@ -347,10 +353,10 @@ def confirm_order_received(order_action_id: int, body: ConfirmRequest,
 
 
 @app.post("/order-actions/{order_action_id}/dismiss", response_model=OrderActionOut)
-def dismiss_order_action(order_action_id: int, body: RejectRequest,
+def dismiss_order_action(request: Request, order_action_id: int, body: RejectRequest,
                          session: Session = Depends(db)):
     try:
-        oa = order_svc.dismiss(session, order_action_id, body.author, body.reason)
+        oa = order_svc.dismiss(session, order_action_id, effective_author(request, body.author), body.reason)
     except order_svc.OrderActionNotFound as e:
         raise HTTPException(404, str(e))
     except order_svc.OrderActionNotActive as e:
@@ -359,8 +365,14 @@ def dismiss_order_action(order_action_id: int, body: RejectRequest,
 
 
 @app.post("/compat-rules/bulk-confirm")
-def bulk_confirm(author: str, threshold: float = 0.9, session: Session = Depends(db)):
-    n = rules_svc.bulk_confirm_high_confidence(session, author, threshold)
+def bulk_confirm(request: Request, author: str = "", threshold: float = 0.9,
+                 session: Session = Depends(db)):
+    # `author` stays in the signature (a query param here, not a body field) so
+    # scripted callers without a token keep working, but a verified identity
+    # overrides it — this endpoint confirms rules in bulk and is the last place
+    # you want a self-asserted name on the record.
+    n = rules_svc.bulk_confirm_high_confidence(
+        session, effective_author(request, author), threshold)
     return {"confirmed": n, "threshold": threshold}
 
 
@@ -375,11 +387,11 @@ def draft_llm_compat_rules(session: Session = Depends(db)):
 
 # ------------------------------------------------------------ adjustments --
 @app.post("/adjustments", response_model=AdjustmentOut)
-def create_adjustment(body: AdjustmentIn, session: Session = Depends(db)):
+def create_adjustment(request: Request, body: AdjustmentIn, session: Session = Depends(db)):
     try:
         a = adj_svc.record_adjustment(session, item_id=body.item_id, month=body.month,
                                       old_value=body.old_value, new_value=body.new_value,
-                                      scope=body.scope, author=body.author,
+                                      scope=body.scope, author=effective_author(request, body.author),
                                       reason=body.reason, factor=body.factor)
     except ValueError as e:
         raise HTTPException(400, str(e))

@@ -108,6 +108,30 @@ async def require_identity(
     )
 
 
+def effective_author(request: Request, supplied: str | None) -> str:
+    """Who to record against a write — the verified identity when we have one.
+
+    Until SSO, `author` was whatever the browser sent: the UI kept a name in
+    localStorage for the user to type, and one call site defaulted to the
+    literal string "bala". So the audit log recorded a claim the client made
+    about itself, which is worth almost nothing the moment it matters — a
+    confirmed compat rule or an order action is exactly the record you would
+    want to trust in a dispute.
+
+    With a validated token present, that token wins and the client's value is
+    IGNORED rather than merged. Preferring the supplied name "when it looks
+    filled in" would leave the same hole open: anyone could still attribute a
+    write to a colleague.
+
+    Falls back to the supplied value when SSO is off, so local dev and the
+    pre-SSO deployment behave exactly as before.
+    """
+    ident = getattr(request.state, "identity", None)
+    if ident is not None:
+        return ident.audit_author
+    return (supplied or "").strip() or "unknown"
+
+
 async def require_api_key(request: Request, x_api_key: str | None = Header(default=None)):
     if not API_KEY:                      # auth disabled — the dev default
         return

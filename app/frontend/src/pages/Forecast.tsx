@@ -12,6 +12,7 @@ import type {
   RebuildHistoryEntry,
 } from "../api/types";
 import type { TranslationKey } from "../i18n/translations";
+import { currentAuthor } from "../auth/author";
 
 const METHOD_KEY: Record<string, TranslationKey> = {
   seasonal: "fc_method_seasonal",
@@ -232,10 +233,6 @@ function SectionLabel({ children }: { children: import("react").ReactNode }) {
       {children}
     </div>
   );
-}
-
-function currentAuthor(): string {
-  return localStorage.getItem("onefcst_author") ?? "bala";
 }
 
 /** Manual order-status tracking (Phase-1: no PO/ERP integration — a human
@@ -620,7 +617,7 @@ export default function Forecast() {
     setTuneSubmitting(true);
     setTuneError(null);
     try {
-      const author = localStorage.getItem("onefcst_author") ?? "bala";
+      const author = currentAuthor();
       await api.createAdjustment({
         item_id: detail.item.id, month: tuneMonth, new_value: newValue,
         scope: "sku", reason: tuneReason.trim(), author,

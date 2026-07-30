@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, downloadReport } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 import type { Adjustment } from "../api/types";
+import { currentAuthor } from "../auth/author";
 
 interface ItemOption {
   id: number;
@@ -30,7 +31,7 @@ export default function Adjustments() {
     new_value: "",
     scope: "sku" as "global" | "category" | "sku",
     reason: "",
-    author: localStorage.getItem("onefcst_author") ?? "bala",
+    author: currentAuthor(),
   });
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
