@@ -11,7 +11,8 @@ from datetime import date, datetime
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-from .config import ONE_MASTER, NOTE_ONE_MASTER, planning_file, TIER1_CATEGORIES
+from .config import (ONE_MASTER, NOTE_ONE_MASTER, PLANNING_DIR, TIER1_CATEGORIES,
+                     find_planning_file, planning_file)
 from .db import init_db, get_session, engine
 from .models import (Base, Snapshot, PlanValue, StockState, Actual, WeeklyActual,
                      Item, ItemAlias)
@@ -195,7 +196,13 @@ def _check_required_sources() -> None:
         missing.append(str(ONE_MASTER))
     if not NOTE_ONE_MASTER.exists():
         missing.append(str(NOTE_ONE_MASTER))
-    for prefix in ("④", "①"):
+    # ① only. ④部材利用数 was demoted to optional on 2026-07-30: 企画部
+    # restructured their NAS folder and ④ is not among the files they upload
+    # ("④確認中" in their reply). Treating it as mandatory meant a single file
+    # they had not got to yet blocked EVERY rebuild — a hard stop for a
+    # degradation. It is still missed loudly: see the ④ step in run(), which
+    # records the gap in the report rather than passing over it.
+    for prefix in ("①",):
         try:
             planning_file(prefix)
         except FileNotFoundError as e:
@@ -377,13 +384,35 @@ def run() -> dict:
          f"({notepc_fc['months'][0]}→{notepc_fc['months'][-1]})  "
          f"unresolved rows={notepc_unresolved}")
 
-    # 3. planning ④ paste (level='planning4')
-    p4 = [p for p in planning4.parse_one_paste() if p["month"] and p["value"] is not None]
-    f4 = planning_file("④")
-    snap4 = _snapshot(session, f4, "その他ONE貼り付け", len(p4), "PASS")
-    unresolved4 = _ingest_plan_rows(session, norm_index, snap4, p4, "planning4",
-                                    resolved_counter)
-    print(f"[④ONE貼り付け] rows={len(p4)}  unresolved={unresolved4}")
+    # 3. planning ④ paste (level='planning4') — OPTIONAL since 2026-07-30
+    #
+    # 企画部 has not uploaded ④部材利用数 to the NAS. Two things degrade when it
+    # is absent, and both are recorded rather than inferred later:
+    #   * no planning4 PlanValues, so verify/report.py's master-vs-planning4
+    #     column and the take-or-pay mismatch comparison have nothing to
+    #     compare against — an EMPTY comparison, not a passing one;
+    #   * no ④企画名前 aliases from the ﾏｽﾀ sheet (registry/build.py step 4), so
+    #     some planning names will not resolve to a 綽名.
+    f4 = find_planning_file("④")
+    if f4 is None:
+        report["planning4"] = {
+            "path": None, "rows": 0, "unresolved": 0,
+            "status": "MISSING",
+            "note": "④部材利用数 not present under PLANNING_DIR — planning4 "
+                    "plan values and ④企画名前 aliases were NOT ingested. "
+                    "master-vs-planning4 comparisons are empty, not passing.",
+        }
+        print("[④ONE貼り付け] *** SKIPPED — no ④部材利用数 workbook found under "
+              f"{PLANNING_DIR}. planning4 comparisons will be EMPTY. ***")
+    else:
+        p4 = [p for p in planning4.parse_one_paste()
+              if p["month"] and p["value"] is not None]
+        snap4 = _snapshot(session, f4, "その他ONE貼り付け", len(p4), "PASS")
+        unresolved4 = _ingest_plan_rows(session, norm_index, snap4, p4, "planning4",
+                                        resolved_counter)
+        report["planning4"] = {"path": str(f4), "rows": len(p4),
+                               "unresolved": unresolved4, "status": "PASS"}
+        print(f"[④ONE貼り付け] rows={len(p4)}  unresolved={unresolved4}")
 
     # 4. planning ①販売計画 (level='planning1') — model-level seed, pre-attach
     p1 = planning1.parse_plan1()

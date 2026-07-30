@@ -39,7 +39,38 @@ def test_error_lists_every_missing_source_not_just_the_first(tmp_path, monkeypat
     assert str(fake_one) in msg
     assert str(fake_note) in msg
     assert "①" in msg or "no ①" in msg
-    assert "④" in msg or "no ④" in msg
+
+
+def test_planning4_is_not_a_required_source(tmp_path, monkeypatch):
+    """④部材利用数 must NOT block a rebuild (policy changed 2026-07-30).
+
+    企画部 restructured their NAS folder and ④ is not among the files they
+    upload. While it was mandatory, that one absent file aborted EVERY
+    rebuild — a hard stop for what is only a degradation. The degradation is
+    reported instead: build.run() records planning4.status = "MISSING" and
+    says the master-vs-planning4 comparison is empty rather than passing.
+
+    Pinned as its own test because re-adding "④" to that tuple is a one-word
+    change that would silently take the DGX offline again.
+    """
+    one = tmp_path / "ONE.xlsm"
+    note = tmp_path / "Note.xlsm"
+    one.write_bytes(b"x")
+    note.write_bytes(b"x")
+    monkeypatch.setattr("onefcst.build.ONE_MASTER", one)
+    monkeypatch.setattr("onefcst.build.NOTE_ONE_MASTER", note)
+
+    asked_for = []
+
+    def only_one_exists(prefix):
+        asked_for.append(prefix)
+        if prefix == "④":
+            raise FileNotFoundError("no ④ (部材利用数) planning workbook found")
+        return tmp_path / f"{prefix}.xlsx"
+
+    monkeypatch.setattr("onefcst.build.planning_file", only_one_exists)
+    _check_required_sources()                      # must NOT raise
+    assert "④" not in asked_for
 
 
 def test_passes_silently_when_all_required_sources_exist(tmp_path, monkeypatch):

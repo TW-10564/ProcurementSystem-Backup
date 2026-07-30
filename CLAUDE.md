@@ -297,7 +297,22 @@ matched via a SYONAME/keyword heuristic in
    source of truth across sessions. Rebuild via `python3 -m onefcst.build`
    or `python3 -m onefcst.rebuild_preserving`.
 
-3. **Snapshot / staleness logic**: `app/` picks the first date column ≥
+3. **Planning-file resolution**: `config.find_planning_file(key)` /
+`planning_file(key)` match the workbook's **own name fragment** (販売計画 /
+ノート集計 / 月次推移 / 部材利用数), searching PLANNING_DIR **recursively**, and
+return the copy naming the latest data PERIOD (filename date beats mtime).
+The old hand-renamed `①②③④` prefixes still work, so both layouts resolve.
+Why: 企画部 restructured their NAS folder on 2026-07-30 into
+`デスクPlan / ノートPlan / Others/{Daily,Weekly,Monthly}` with their own names —
+a prefix glob found nothing, which aborted every DGX rebuild, and locally read
+month-old data with no symptom because stale prefixed copies were still there.
+`_archive*` folders and `~$` lock files are excluded. **④部材利用数 is
+OPTIONAL** (not uploaded by 企画部): its absence sets
+`report["planning4"]["status"] = "MISSING"` and leaves master-vs-planning4
+comparisons EMPTY, not passing. Do not put "④" back in
+`_check_required_sources` — one word there takes the DGX offline.
+
+**Snapshot / staleness logic**: `app/` picks the first date column ≥
    today per source file; if a file is stale (no column reaches today), it
    falls back to the last column and flags it. `app/`'s forecast detail
    exposes `snapshot_date` on `ForecastDetail.stock` but the frontend does

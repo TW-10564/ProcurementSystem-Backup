@@ -4,6 +4,7 @@ Phase-1 rule: every path here is READ-ONLY input. The only writable location
 is DATA_DIR (the app's own store: SQLite DB + generated Excel exports).
 """
 import os
+import re
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[3]          # Procurement-System/
@@ -60,12 +61,12 @@ NAS_ZP21_UNC = os.environ.get(
 NAS_ZM13_CACHE = SAP_DIR / "週頭在庫_ZM13"
 NAS_ZP21_CACHE = SAP_DIR / "組込実績_ZP21"
 
-# 企画部's monthly ①②③④ sales-plan drop (agreed 2026-07-30). Until they start
-# using it these files arrive by hand, so the folder may not exist yet on the
-# share — nas_sync treats an unreachable subfolder as a no-op, keeping whatever
-# is already in PLANNING_DIR, rather than failing the rebuild. Mirrored INTO
-# PLANNING_DIR itself (not a subfolder) because planning_file() globs that
-# directory directly by ①②③④ prefix.
+# 企画部's sales-plan drop (agreed 2026-07-30). Mirrored INTO PLANNING_DIR
+# itself, preserving 企画部's own subfolders — find_planning_file() searches
+# recursively, so the nesting is fine and the ①②③④ renaming we used to do by
+# hand is no longer needed. nas_sync treats an unreachable subfolder as a
+# no-op, keeping whatever is already in PLANNING_DIR rather than failing the
+# rebuild.
 NAS_PLAN_UNC = os.environ.get(
     "ONEFCST_NAS_PLAN_UNC",
     r"\\172.25.20.11\サードウェーブグループ\43上期\サードウェーブ\購買本部\【通常業務】\ONE\★販売計画（企画部）")
@@ -81,12 +82,100 @@ NOTE_STOCK_PLAN = PLANNING_DIR / "ノート在庫使用計画_43期.xlsx"
 STOCK_POLICY_GLOB = os.environ.get("STOCK_POLICY_GLOB", str(ONE_DIR / "在庫の持ち方*.xlsx"))
 
 
-def planning_file(prefix: str) -> Path:
-    """Find a planning workbook by its circled-number prefix (①②③④)."""
-    hits = sorted(PLANNING_DIR.glob(f"{prefix}*.xlsx"))
+# --- planning workbook resolution -------------------------------------------
+# The four planning inputs used to be hand-renamed with a circled-number
+# prefix (①②③④) and dropped FLAT into PLANNING_DIR. On 2026-07-30 企画部 built
+# their own structure on the NAS and named the files their way:
+#
+#   ★販売計画（企画部）/デスクPlan/販売計画6月提出分_….xlsx          ← ①
+#                      /ノートPlan/                                  ← (empty)
+#                      /Others/Monthly/☆値のみ【月次】【係数】月次推移20260701.xlsx  ← ③
+#                      /Others/Weekly/【日次】ノート集計【2026年6月】_0602 1.xlsx    ← ②
+#
+# A prefix glob finds NOTHING in there: no circled numbers, and the files are
+# nested. On the DGX, PLANNING_DIR points straight at that folder, so every
+# rebuild aborted in _check_required_sources. Locally it was worse than an
+# error — stale ①②③④ copies still sat at the top of PLANNING_DIR, so ingestion
+# reported success while reading June data with July on disk unread.
+#
+# So match on the workbook's OWN distinctive name fragment, which is what
+# survived their rename, and keep the legacy prefix as an alternative. Both
+# layouts work, in one code path, with no cutover.
+PLANNING_SOURCES: dict[str, dict] = {
+    "①": {"label": "販売計画",     "fragments": ("販売計画",)},
+    "②": {"label": "ノート集計",   "fragments": ("ノート集計",)},
+    "③": {"label": "係数月次推移", "fragments": ("月次推移",)},
+    "④": {"label": "部材利用数",   "fragments": ("部材利用数",)},
+}
+
+# Our own archive of superseded copies, and Excel's lock files. Including
+# either would let a file we deliberately retired win the "newest" contest.
+_PLANNING_IGNORED_DIRS = ("_archive",)
+
+
+def _planning_period_key(path: Path) -> tuple:
+    """Sort key: which copy holds the most RECENT data.
+
+    Prefers a date embedded in the FILENAME over the file's mtime, because the
+    name states the data period while mtime only records when someone copied
+    the file. A June workbook re-uploaded today would otherwise beat a July
+    one that has sat on the NAS untouched — exactly backwards.
+    """
+    name = path.name
+    stamps = re.findall(r"(20\d{6})", name)              # 20260701
+    if stamps:
+        key = max(stamps)
+    else:
+        m = re.search(r"(20\d{2})年\s*(\d{1,2})月", name)  # 【2026年6月】
+        key = f"{m.group(1)}{int(m.group(2)):02d}00" if m else ""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return (key, mtime, name)
+
+
+def _planning_candidates() -> list[Path]:
+    if not PLANNING_DIR.exists():
+        return []
+    out = []
+    for p in PLANNING_DIR.rglob("*.xls*"):
+        if not p.is_file() or p.name.startswith(("~$", ".")):
+            continue          # Excel lock files masquerade as real workbooks
+        if any(part.startswith(_PLANNING_IGNORED_DIRS) for part in p.parts):
+            continue
+        out.append(p)
+    return out
+
+
+def find_planning_file(key: str) -> Path | None:
+    """Resolve a planning workbook, or None if it is not present.
+
+    `key` is the historical circled number (①②③④). Matches either that literal
+    prefix or the file's own name fragment, anywhere under PLANNING_DIR.
+    """
+    spec = PLANNING_SOURCES.get(key, {})
+    fragments = spec.get("fragments", ())
+    hits = [p for p in _planning_candidates()
+            if p.name.startswith(key) or any(f in p.name for f in fragments)]
     if not hits:
-        raise FileNotFoundError(f"no {prefix}* file in {PLANNING_DIR}")
-    return hits[0]
+        return None
+    return max(hits, key=_planning_period_key)
+
+
+def planning_file(prefix: str) -> Path:
+    """As find_planning_file, but raises when the workbook is missing.
+
+    Kept raising for the inputs a build genuinely cannot proceed without;
+    callers that can degrade should use find_planning_file and say so loudly.
+    """
+    hit = find_planning_file(prefix)
+    if hit is None:
+        label = PLANNING_SOURCES.get(prefix, {}).get("label", "")
+        raise FileNotFoundError(
+            f"no {prefix}{f' ({label})' if label else ''} planning workbook "
+            f"found anywhere under {PLANNING_DIR}")
+    return hit
 
 
 # --- app-owned (the ONLY writable area) --------------------------------------

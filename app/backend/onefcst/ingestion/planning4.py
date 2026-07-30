@@ -8,16 +8,35 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ..config import planning_file
+from ..config import find_planning_file
 from .excel import read_xlsx_rows, col_letter
+
+_WARNED = False
 
 
 def _f4():
-    return planning_file("④")
+    """The ④ workbook, or None when 企画部 has not uploaded it.
+
+    Optional since 2026-07-30 (see build.run step 3). Returning None rather
+    than raising keeps registry/build.py's alias step working unchanged — it
+    simply contributes no ④企画名前 aliases — instead of one absent file
+    aborting a whole rebuild. Warned exactly once per process: this is called
+    from several places and a per-call warning would bury the build log.
+    """
+    global _WARNED
+    path = find_planning_file("④")
+    if path is None and not _WARNED:
+        _WARNED = True
+        print("[④部材利用数] not found — ④企画名前 aliases and planning4 plan "
+              "values will be absent from this build")
+    return path
 
 
 def parse_masta_aliases() -> list[dict]:
-    rows = read_xlsx_rows(_f4(), "ﾏｽﾀ")
+    f4 = _f4()
+    if f4 is None:
+        return []
+    rows = read_xlsx_rows(f4, "ﾏｽﾀ")
     hdr_idx = None
     for i, r in enumerate(rows[:5]):
         cells = [str(c or "") for c in r]
@@ -40,7 +59,10 @@ def parse_masta_aliases() -> list[dict]:
 
 def parse_one_paste() -> list[dict]:
     """その他ONE貼り付け: 汎用コード | 綽名 | <month value> | 大分類 (all parts)."""
-    rows = read_xlsx_rows(_f4(), "その他ONE貼り付け")
+    f4 = _f4()
+    if f4 is None:
+        return []
+    rows = read_xlsx_rows(f4, "その他ONE貼り付け")
     hdr = rows[0]
     month = next((v for v in hdr if isinstance(v, datetime)), None)
     out = []
