@@ -1,0 +1,72 @@
+# LOCAL Entra SSO trial — this box, not the DGX.
+#
+#   cp deploy/sso.local.env.example deploy/.env.sso.local     # then fill it in
+#   docker compose -f deploy/docker-compose.sso.local.yml \
+#                  --env-file deploy/.env.sso.local up
+#   open http://localhost:4180
+#
+# Standalone on purpose: it starts ONLY oauth2-proxy and points it at the
+# uvicorn already running natively on :8600. It does not pull in
+# docker-compose.yml, so there is no Postgres, no image build, and no risk of
+# a second stack colliding with the dev database.
+#
+# Differences from the production overlay (deploy/docker-compose.sso.yml),
+# each of which would otherwise break a local trial:
+#   * cookie-secure=false — there is no TLS on localhost, and a "secure"
+#     cookie is silently dropped by the browser over http. The symptom is an
+#     endless redirect loop between the proxy and Microsoft, which looks like
+#     a config error in Entra and is not.
+#   * redirect-url on localhost:4180 — this exact URI must ALSO be registered
+#     in the Entra app registration. Entra allows http for localhost only.
+#   * upstream is the app directly, so nginx is out of the picture for the
+#     first test. Once sign-in works, nginx auth_request is the second step.
+#
+# WITHOUT A CLIENT SECRET this gets you as far as Microsoft's login page and
+# then fails at the token exchange with AADSTS7000215 (invalid client secret).
+# That is expected and still worth running: reaching the login page proves the
+# tenant, client ID, issuer discovery, redirect URI and proxy wiring are all
+# correct — everything except the one value you have deliberately not asked
+# for yet.
+
+services:
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    container_name: onefcst-sso-local
+    command:
+      - --provider=oidc
+      - --provider-display-name=Microsoft Entra ID (local test)
+      - --oidc-issuer-url=https://login.microsoftonline.com/${ENTRA_TENANT_ID:?set ENTRA_TENANT_ID in deploy/.env.sso.local}/v2.0
+      - --client-id=${ENTRA_CLIENT_ID:?set ENTRA_CLIENT_ID in deploy/.env.sso.local}
+      - --client-secret=${ENTRA_CLIENT_SECRET:-not-yet-issued}
+      # Localhost for the local trial; override the variable when this same
+      # rig is pointed at the real hostname. Entra allows PLAIN HTTP only for
+      # localhost/127.0.0.1 — any other host, including a bare LAN IP like
+      # 172.16.6.91, must be https or the registration is rejected. So this
+      # trial has to be driven from a browser ON THIS MACHINE.
+      - --redirect-url=${ENTRA_REDIRECT_URI:-http://localhost:4180/oauth2/callback}
+      - --http-address=0.0.0.0:4180
+      - --cookie-secret=${ENTRA_COOKIE_SECRET:?generate one: openssl rand -base64 32 | head -c 32}
+      - --cookie-secure=false
+      - --cookie-expire=8h
+      - --email-domain=*
+      - --set-xauthrequest=true
+      - --pass-access-token=false
+      - --scope=openid profile email groups
+      # the app running natively on this host, outside docker
+      - --upstream=http://host.docker.internal:8600
+      # /health must stay reachable unauthenticated, same as in production
+      - --skip-auth-regex=^/health$$
+      # verbose: we WANT to see the discovery fetch and the token exchange
+      - --standard-logging=true
+      - --auth-logging=true
+      - --request-logging=true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:4180:4180"
+    environment:
+      TZ: ${TZ:-Asia/Tokyo}
+      # the corporate proxy — oauth2-proxy must reach login.microsoftonline.com
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-${HTTP_PROXY:-}}
+      NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost,host.docker.internal}

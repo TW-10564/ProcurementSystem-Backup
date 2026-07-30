@@ -79,3 +79,6 @@ SAP在庫抽出.db*
 *.p12
 *.csr
 INSTALL_INSTRUCTIONS*.txt
+
+# local SSO trial env (real tenant/client values)
+deploy/.env.sso.local
