@@ -85,6 +85,8 @@ services:
       # Microsoft sign-in the only way in.
       ONEFCST_ENTRA_ALLOW_API_KEY: ${ONEFCST_ENTRA_ALLOW_API_KEY:-1}
       ONEFCST_ENTRA_ALLOWED_GROUPS: ${ONEFCST_ENTRA_ALLOWED_GROUPS:-}
+      # Named-user allowlist, for before Entra "assignment required" is set.
+      ONEFCST_ENTRA_ALLOWED_EMAILS: ${ONEFCST_ENTRA_ALLOWED_EMAILS:-}
 
       # Read-only NAS sources, as seen INSIDE the container (see volumes).
       ONE_SOURCE_DIR: /mnt/nas/one

@@ -55,6 +55,7 @@ def entra_configured(monkeypatch, jwks):
     monkeypatch.setattr(config, "ENTRA_CLIENT_ID", CLIENT)
     monkeypatch.setattr(config, "ENTRA_AUDIENCE", CLIENT)
     monkeypatch.setattr(config, "ENTRA_ALLOWED_GROUPS", [])
+    monkeypatch.setattr(config, "ENTRA_ALLOWED_EMAILS", [])
     entra.reset_signing_keys(entra._test_signing_keys(jwks))
     yield
     entra.reset_signing_keys(None)
@@ -214,3 +215,44 @@ def test_unconfigured_server_refuses_to_validate(keypair, monkeypatch):
     monkeypatch.setattr(config, "ENTRA_TENANT_ID", "")
     with pytest.raises(entra.TokenError):
         entra.verify_token(token)
+
+
+# ------------------------------------------------- named-user allowlist ---
+# Restricting sign-in properly belongs in Entra, but that needs a tenant
+# admin. These cover the interim control that does not.
+
+def test_email_allowlist_admits_only_listed_users(keypair, monkeypatch):
+    monkeypatch.setattr(config, "ENTRA_ALLOWED_EMAILS", ["tanaka@twave.co.jp"])
+    assert entra.verify_token(make_token(keypair)).email == "tanaka@twave.co.jp"
+    with pytest.raises(entra.TokenError):
+        entra.verify_token(make_token(
+            keypair, extra={"preferred_username": "stranger@twave.co.jp"}))
+
+
+def test_email_allowlist_is_case_insensitive(keypair, monkeypatch):
+    """Entra's casing for an address is not guaranteed to match what was typed
+    into the env file, and a case-sensitive compare would lock out a real user
+    for a reason nobody would think to look for."""
+    monkeypatch.setattr(config, "ENTRA_ALLOWED_EMAILS", ["tanaka@twave.co.jp"])
+    assert entra.verify_token(make_token(
+        keypair, extra={"preferred_username": "Tanaka@TWave.co.JP"}))
+
+
+def test_email_allowlist_matches_upn_when_email_claim_is_absent(keypair, monkeypatch):
+    """Tenants that never populate `email` must still be able to use this."""
+    monkeypatch.setattr(config, "ENTRA_ALLOWED_EMAILS", ["tanaka@twave.co.jp"])
+    assert entra.verify_token(make_token(
+        keypair, drop=("preferred_username",), extra={"upn": "tanaka@twave.co.jp"}))
+
+
+def test_empty_email_allowlist_admits_everyone(keypair, monkeypatch):
+    monkeypatch.setattr(config, "ENTRA_ALLOWED_EMAILS", [])
+    assert entra.verify_token(make_token(keypair, extra={"preferred_username": "anyone@twave.co.jp"}))
+
+
+def test_a_blank_claim_never_satisfies_the_allowlist(keypair, monkeypatch):
+    """An empty address must not match an empty entry and let a stranger in."""
+    monkeypatch.setattr(config, "ENTRA_ALLOWED_EMAILS", ["tanaka@twave.co.jp", ""])
+    with pytest.raises(entra.TokenError):
+        entra.verify_token(make_token(
+            keypair, drop=("preferred_username",), extra={"email": ""}))

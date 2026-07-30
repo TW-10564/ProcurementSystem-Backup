@@ -187,6 +187,21 @@ ENTRA_ALLOW_API_KEY = os.environ.get("ONEFCST_ENTRA_ALLOW_API_KEY", "1") not in 
 ENTRA_ALLOWED_GROUPS = [g.strip() for g in os.environ.get(
     "ONEFCST_ENTRA_ALLOWED_GROUPS", "").split(",") if g.strip()]
 
+# Named-user allowlist — comma-separated work addresses. Compared
+# case-insensitively against the token's `email`/`preferred_username`.
+#
+# This exists because the two controls live in different hands. Restricting
+# sign-in properly belongs in Entra ("assignment required" + assign the staff),
+# but that needs a tenant admin. Until they act, admin consent alone means
+# ANY account in the tenant can sign in, and this closes that window without
+# waiting for anyone. It is also the honest fallback if assignment is ever
+# switched off in Entra without telling us.
+#
+# Not a replacement for Entra assignment: it stops a signed-in stranger from
+# using the app, but they can still authenticate. Empty = no email filter.
+ENTRA_ALLOWED_EMAILS = [e.strip().lower() for e in os.environ.get(
+    "ONEFCST_ENTRA_ALLOWED_EMAILS", "").split(",") if e.strip()]
+
 ENTRA_ENABLED = bool(ENTRA_TENANT_ID and ENTRA_CLIENT_ID)
 
 # --- rate limiting ----------------------------------------------------------

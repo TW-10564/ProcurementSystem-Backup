@@ -44,6 +44,7 @@ def _no_env_auth(monkeypatch):
     monkeypatch.setattr(config, "ENTRA_TENANT_ID", "")
     monkeypatch.setattr(config, "ENTRA_CLIENT_ID", "")
     monkeypatch.setattr(config, "ENTRA_ALLOWED_GROUPS", [])
+    monkeypatch.setattr(config, "ENTRA_ALLOWED_EMAILS", [])
 
 
 @pytest.fixture(autouse=True, scope="session")

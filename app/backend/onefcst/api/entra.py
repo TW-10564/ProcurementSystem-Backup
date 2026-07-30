@@ -250,6 +250,19 @@ def verify_token(token: str, *, leeway: float = 60.0) -> Identity:
             # A real, fully-signed identity that is simply not permitted here.
             raise TokenError("identity is not in an allowed group")
 
+    if config.ENTRA_ALLOWED_EMAILS:
+        # Both claims are checked because which one carries the address depends
+        # on tenant configuration: `email` needs the optional claim enabled,
+        # while `preferred_username` is always present for a work account. A
+        # check against only `email` silently locks everyone out in tenants
+        # that do not populate it.
+        addresses = {
+            str(claims.get(c, "")).strip().lower()
+            for c in ("email", "preferred_username", "upn")
+        } - {""}
+        if not (addresses & set(config.ENTRA_ALLOWED_EMAILS)):
+            raise TokenError("identity is not in the allowed-user list")
+
     return Identity(
         subject=str(claims.get("sub", "")),
         oid=str(claims.get("oid", "")),
@@ -273,6 +286,10 @@ def describe_config() -> dict[str, Any]:
         "audiences": list(_audiences()),
         "issuers": list(_issuers(config.ENTRA_TENANT_ID)) if config.ENTRA_TENANT_ID else [],
         "restricted_to_groups": list(config.ENTRA_ALLOWED_GROUPS),
+        # COUNT only, never the addresses. This endpoint is public, and the
+        # allowlist is a roster of named employees — publishing it would leak
+        # who works on procurement to anyone who can reach the port.
+        "restricted_to_named_users": len(config.ENTRA_ALLOWED_EMAILS),
     }
 
 
