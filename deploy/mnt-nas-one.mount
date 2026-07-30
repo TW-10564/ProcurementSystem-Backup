@@ -23,7 +23,13 @@ After=network-online.target
 Wants=network-online.target
 
 [Mount]
-What=//172.25.20.11/サードウェーブグループ
+# The share ROOT is //172.25.20.11/サードウェーブグループ, but the ONE files sit
+# five levels down — verified 2026-07-30 against the dev box's Z: mapping, which
+# resolves to exactly this path. Mounting the share root instead would put
+# ONE計画.xlsm at /mnt/nas/one/43上期/…/ONE/ONE計画.xlsm, so every config.py glob
+# would miss and the build would report "missing source file" while the files
+# are plainly on the share. cifs supports mounting a subdirectory like this.
+What=//172.25.20.11/サードウェーブグループ/43上期/サードウェーブ/購買本部/【通常業務】/ONE
 Where=/mnt/nas/one
 Type=cifs
 

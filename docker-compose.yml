@@ -105,10 +105,24 @@ services:
       # Only used while planning files are still hand-uploaded rather than
       # dropped in ★販売計画（企画部） on the share; harmless when unused.
       - ${NAS_PLANNING_DIR:-/mnt/nas/planning}:/mnt/nas/planning:ro
-      # SAP cache is writable: ingestion mirrors the weekly ZM13/ZP21 drops
-      # into subfolders under SAP_DIR. Same reasoning as the data dir above —
-      # point it outside the repo on the DGX.
+      # SAP_DIR, writable: holds the hand-placed files that are NOT on the
+      # share (SAP部材管理_詳細版*.xlsx — verified 2026-07-30, it is nowhere in
+      # the ONE folder).
       - ${SAP_CACHE_HOST_DIR:-./data/sap}:/srv/sap
+
+      # …and the two weekly SAP drops come straight off the mounted share, as
+      # read-only subfolders of SAP_DIR. This is LOAD-BEARING since 2026-07-30:
+      # stock is now read from the ZM13 files, and in mount mode nas_sync is a
+      # no-op, so nothing would ever populate /srv/sap — the DGX would run with
+      # NO stock data and no order suggestions at all.
+      #
+      # The container-side names match the dev cache layout
+      # (data/sap/週頭在庫_ZM13, data/sap/組込実績_ZP21) so both environments see
+      # an identical tree under SAP_DIR. Note the NAS folders use HALF-width
+      # parens for (ZM13)/(ZP21) and FULL-width for （企画部） — exact names,
+      # verified against the share.
+      - ${NAS_ZM13_DIR:-/mnt/nas/one/★週頭在庫(ZM13)}:/srv/sap/週頭在庫_ZM13:ro
+      - ${NAS_ZP21_DIR:-/mnt/nas/one/★組込実績(ZP21)}:/srv/sap/組込実績_ZP21:ro
     ports:
       # loopback only — nginx on the host is the sole public entry point
       - "127.0.0.1:8600:8600"

@@ -47,6 +47,17 @@ Nothing here needs Entra, and each one removes a variable from the day itself.
 - [ ] **1.5** Store the AD credentials for the share in a root-only file
       (`/etc/onefcst/nas.cred`, mode 0600).
 - [ ] **1.6** Install `deploy/mnt-nas-one.mount`, `systemctl enable --now` it.
+      It mounts the **ONE folder**, not the share root — the share is
+      `//172.25.20.11/サードウェーブグループ` but ONE計画.xlsm sits five levels
+      down under `43上期/サードウェーブ/購買本部/【通常業務】/ONE` (verified
+      against the dev box's Z: mapping). Mount the root by mistake and every
+      glob misses while the files are plainly there.
+- [ ] **1.6b** Confirm the three drop folders are visible **inside** the mount,
+      with their exact names — `★週頭在庫(ZM13)` and `★組込実績(ZP21)` use
+      half-width parens, `★販売計画（企画部）` full-width:
+      `ls -d /mnt/nas/one/★*`. compose bind-mounts the first two into
+      `/srv/sap/{週頭在庫_ZM13,組込実績_ZP21}`, so a wrong name here means the
+      container starts with no stock data at all.
 - [ ] **1.7** **`ls /mnt/nas/one` and read the Japanese filenames.** This is the
       single most likely failure of the whole deployment: if `iocharset=utf8`
       is not taking effect, names come back mangled, every glob in `config.py`

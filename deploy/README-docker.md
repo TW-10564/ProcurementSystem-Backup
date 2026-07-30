@@ -153,6 +153,15 @@ reads it. Per-department permissions are follow-on work.
 
 ### Things that will bite
 
+- **Mount the ONE folder, not the share root.** `//172.25.20.11/サードウェーブグループ`
+  is the share; ONE計画.xlsm is five levels deeper. `deploy/mnt-nas-one.mount`
+  already has the full path — don't "simplify" it.
+- **`/srv/sap` gets the weekly SAP drops via two read-only bind mounts** of
+  `★週頭在庫(ZM13)` / `★組込実績(ZP21)` from inside the NAS mount. Stock is read
+  from those files, and `nas_sync` is a deliberate no-op in mount mode, so
+  without them the app runs with **no stock data and no order suggestions** —
+  and nothing errors, because a missing weekly file is treated as non-blocking.
+
 - **A failed backup aborts the rebuild.** Deliberate: the human data
   (adjustments, confirmed compat rules, audit log) exists nowhere else. If
   rebuilds start failing, check `pg_dump` and disk space first.
