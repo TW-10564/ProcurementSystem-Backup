@@ -69,14 +69,31 @@ jobs:
       HEALTH_URL: http://127.0.0.1:8600/health
 
     steps:
+      # Both values arrive through the environment, never interpolated into the
+      # script body: `${{ inputs.ref }}` inline is a template substitution that
+      # happens BEFORE bash sees the line, so a ref containing shell
+      # metacharacters would execute on the DGX. Write access is needed to
+      # dispatch, but "only trusted people can trigger it" is not a reason to
+      # leave an injection in a job that runs on our own hardware.
       - name: Resolve the ref being deployed
         id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_REF: ${{ inputs.ref }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "ref=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            ref="$INPUT_REF"
           else
-            echo "ref=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+            ref="$CI_SHA"
           fi
+          # Whitelist the shape too — refs are SHAs, tags or branch names.
+          if ! printf '%s' "$ref" | grep -qE '^[A-Za-z0-9._/-]+$'; then
+            echo "::error::refusing to deploy ref with unexpected characters"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
@@ -169,10 +186,12 @@ jobs:
       # so users should see a notice while you read the logs.
       - name: Roll back
         if: failure() && steps.prev.outputs.id != ''
+        env:
+          PREV_IMAGE_ID: ${{ steps.prev.outputs.id }}
         run: |
           set -uo pipefail
-          echo "::warning::rolling back to ${{ steps.prev.outputs.id }}"
-          docker tag "${{ steps.prev.outputs.id }}" "$IMAGE"
+          echo "::warning::rolling back to $PREV_IMAGE_ID"
+          docker tag "$PREV_IMAGE_ID" "$IMAGE"
           docker compose --env-file "$ENV_FILE" up -d --no-build
           for i in $(seq 1 20); do
             curl -sf -m 5 "$HEALTH_URL" >/dev/null && { echo "rollback healthy"; exit 0; }
@@ -189,15 +208,20 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          DEPLOYED_REF: ${{ steps.target.outputs.ref }}
+          PREV_IMAGE_ID: ${{ steps.prev.outputs.id }}
+          MAINT_WAS_ON: ${{ steps.maint.outputs.was_on }}
         run: |
           {
-            echo "### Deploy ${{ job.status }}"
+            echo "### Deploy $JOB_STATUS"
             echo ""
             echo "| | |"
             echo "|---|---|"
-            echo "| Ref | \`${{ steps.target.outputs.ref }}\` |"
-            echo "| Previous image | \`${{ steps.prev.outputs.id }}\` |"
-            echo "| Maintenance was already on | ${{ steps.maint.outputs.was_on }} |"
+            echo "| Ref | \`$DEPLOYED_REF\` |"
+            echo "| Previous image | \`$PREV_IMAGE_ID\` |"
+            echo "| Maintenance was already on | $MAINT_WAS_ON |"
             echo ""
             echo "Schema changes are NOT applied by this workflow — a model"
             echo "change still needs \`python -m onefcst.rebuild_preserving\`."

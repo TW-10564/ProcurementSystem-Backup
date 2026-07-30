@@ -55,3 +55,16 @@ app/data/maintenance.json
 # deliberately NOT ignored — the training video ships inside the system so
 # the team can only watch it by playing it in the portal, rather than it
 # circulating as a loose file. See app/frontend/public/help/README.md
+
+# Access DB copies of the SAP stock extract — business data (社外秘), and the
+# 2026-07-30 audit found `SAP在庫抽出.db.prev-backup` had been committed
+# because only the exact name was ignored. Cover every suffix.
+SAP在庫抽出.db*
+*.accdb
+
+# stray empty DB at the repo root; the real one is app/data/onefcst.db
+/data/onefcst.db
+
+# git worktrees Claude Code creates, plus the archived diffs of removed ones
+.claude/worktrees/
+.claude/worktree-archive/
