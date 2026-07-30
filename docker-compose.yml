@@ -1,0 +1,99 @@
+# ONE forecasting portal — DGX deployment.
+#
+#   cp deploy/compose.env.example .env      # then edit
+#   docker compose build --build-arg VITE_API_KEY="$ONEFCST_API_KEY"
+#   docker compose up -d
+#
+# TLS and Entra ID sign-in are handled by nginx on the HOST
+# (deploy/nginx-onefcst.conf), which proxies to 127.0.0.1:8600. The app port
+# is deliberately bound to loopback only so nothing reaches it unencrypted.
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-onefcst}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-onefcst}
+      # naive datetimes are compared against datetime.utcnow() in
+      # scheduler.py; pin the timezone so a host TZ change can't shift
+      # "is this run due?" by hours
+      TZ: ${TZ:-Asia/Tokyo}
+      PGTZ: ${TZ:-Asia/Tokyo}
+    command:
+      - postgres
+      # Backstop for the drop_all lock problem: build.py sets its own
+      # lock_timeout so a blocked DROP fails fast, but that only helps if
+      # the blocker eventually goes away. This bounds how long any single
+      # leaked "idle in transaction" session (a report endpoint whose
+      # request died mid-flight) can hold locks at all.
+      - -c
+      - idle_in_transaction_session_timeout=300000
+      # DROP SCHEMA/TABLE across 16 tables takes a lot of locks at once
+      - -c
+      - max_locks_per_transaction=256
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # app's depends_on waits for this, so a rebuild can't start against a
+      # database that is still initialising
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-onefcst} -d ${POSTGRES_DB:-onefcst}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  app:
+    build:
+      context: .
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
+        # baked into the JS bundle at build time — see Dockerfile
+        VITE_API_KEY: ${ONEFCST_API_KEY:-}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-onefcst}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-onefcst}
+      TZ: ${TZ:-Asia/Tokyo}
+
+      # Auth is OPEN when this is empty (api/auth.py) — must be set here.
+      ONEFCST_API_KEY: ${ONEFCST_API_KEY:?set ONEFCST_API_KEY in .env}
+      ONEFCST_CORS_ORIGINS: ${ONEFCST_CORS_ORIGINS:-}
+      ONEFCST_RATE_LIMIT_PER_MINUTE: ${ONEFCST_RATE_LIMIT_PER_MINUTE:-120}
+
+      # Read-only NAS sources, as seen INSIDE the container (see volumes).
+      ONE_SOURCE_DIR: /mnt/nas/one
+      PLANNING_DIR: /mnt/nas/planning
+      SAP_DIR: /srv/sap
+      # nas_sync.py is WSL/Windows-interop only and cannot run here; the
+      # share is mounted on the host instead. Phase 5 adds an explicit
+      # branch so this reports "mounted directly" rather than a silent skip.
+      ONEFCST_NAS_MODE: mount
+
+      ONEFCST_SCHEDULER_ENABLED: ${ONEFCST_SCHEDULER_ENABLED:-1}
+      ONEFCST_DB_BACKUP_KEEP: ${ONEFCST_DB_BACKUP_KEEP:-7}
+      ONEFCST_DROP_LOCK_TIMEOUT: ${ONEFCST_DROP_LOCK_TIMEOUT:-15s}
+      ONEFCST_LLM_API_KEY: ${ONEFCST_LLM_API_KEY:-}
+    volumes:
+      # The only writable location: SQLite-era data dir, still used for
+      # exports, pg_dump backups and maintenance.json (deliberately a FILE
+      # so it is readable when the DB is down — see maintenance.py).
+      - ./app/data:/opt/onefcst/app/data
+
+      # NAS, mounted read-only on the HOST by a systemd .mount unit and
+      # passed straight through. Read-only at BOTH layers enforces the
+      # Phase-1 rule that ONE source files are never written (CLAUDE.md #1).
+      - ${NAS_ONE_DIR:-/mnt/nas/one}:/mnt/nas/one:ro
+      - ${NAS_PLANNING_DIR:-/mnt/nas/planning}:/mnt/nas/planning:ro
+      # SAP cache is writable: ingestion mirrors the weekly ZM13/ZP21 drops
+      # into subfolders under SAP_DIR.
+      - ./data/sap:/srv/sap
+    ports:
+      # loopback only — nginx on the host is the sole public entry point
+      - "127.0.0.1:8600:8600"
+
+volumes:
+  pgdata:

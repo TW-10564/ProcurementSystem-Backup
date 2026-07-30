@@ -28,7 +28,9 @@ failure surface."""
 from __future__ import annotations
 
 import base64
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 from .config import (NAS_ZM13_CACHE, NAS_ZM13_UNC, NAS_ZP21_CACHE,
@@ -58,15 +60,67 @@ def _to_windows_path(p: Path) -> str:
     return result.stdout.strip()
 
 
+def _mount_mode_result() -> dict:
+    """Result for deployments where the NAS is mounted by the OS (the DGX:
+    a systemd .mount unit doing cifs, bind-mounted read-only into the
+    container) rather than mirrored to a local cache.
+
+    There is nothing to copy in that setup — ONE_SOURCE_DIR already points
+    straight at the live share — so this is a legitimate no-op. It exists as
+    an EXPLICIT branch because the alternative is the silent
+    "wslpath unavailable" skip below, which is indistinguishable from a
+    genuinely broken sync and would send someone hunting a non-problem.
+
+    Still reports whether the mount actually has files: an empty or absent
+    mount point is the realistic failure here (share not mounted, credentials
+    expired, host rebooted before the unit came up), and it should be visible
+    in the rebuild report rather than only surfacing later as a confusing
+    "missing source file" from _check_required_sources().
+    """
+    present = ONE_DIR.is_dir()
+    n = len(list(ONE_DIR.glob("*"))) if present else 0
+    if not present or n == 0:
+        return {"status": "error", "mode": "mount", "one_dir": str(ONE_DIR),
+                "files_in_cache": n,
+                "reason": (f"NAS mount {ONE_DIR} is "
+                           f"{'missing' if not present else 'empty'} — check the "
+                           f"cifs mount on the host (systemctl status "
+                           f"'mnt-nas-*.mount') and that credentials are valid")}
+    return {"status": "ok", "mode": "mount", "one_dir": str(ONE_DIR),
+            "files_in_cache": n,
+            "reason": "NAS mounted directly by the OS — no sync needed"}
+
+
 def refresh_from_nas(timeout_seconds: int = 180) -> dict:
-    """Robocopy-mirrors NAS_SOURCE_WIN onto ONE_DIR via Windows interop.
+    """Refresh the ONE source files, by whichever mechanism this host has.
+
+    Two supported modes:
+      * ONEFCST_NAS_MODE=mount — the DGX/container deployment. The share is
+        mounted by the OS and ONE_SOURCE_DIR points at it; nothing to copy.
+      * default — the WSL dev box. Robocopy-mirrors NAS_SOURCE_WIN onto
+        ONE_DIR through Windows interop, because WSL cannot mount a
+        net-use'd drive letter (see the module docstring).
+
     Returns {"status": "ok"|"skipped"|"error", ...} — never raises, so a
     caller can decide whether to proceed with whatever's already cached
     locally (build.py's own required-source check is the real safety net
     either way)."""
+    if os.environ.get("ONEFCST_NAS_MODE", "").lower() == "mount":
+        return _mount_mode_result()
+
     try:
         dest_win = _to_windows_path(ONE_DIR)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        # Reached on any non-WSL Linux host that forgot ONEFCST_NAS_MODE.
+        # Name that explicitly — the old message just said "wslpath
+        # unavailable", which reads like a broken dev box rather than a
+        # missing deployment setting.
+        if not sys.platform.startswith("win") and not Path("/proc/sys/fs/binfmt_misc/WSLInterop").exists():
+            return {"status": "skipped",
+                    "reason": ("no Windows interop on this host. If the NAS is "
+                               "mounted by the OS (DGX/container), set "
+                               "ONEFCST_NAS_MODE=mount so this is a deliberate "
+                               "no-op instead of a silent skip.")}
         return {"status": "skipped", "reason": f"wslpath unavailable: {e!r}"}
 
     sap_dests = {}

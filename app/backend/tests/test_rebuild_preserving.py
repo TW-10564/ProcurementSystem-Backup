@@ -66,6 +66,16 @@ def test_adjustment_and_compat_rule_and_audit_log_survive_a_rebuild(session):
 
     snap = _snapshot(session)
 
+    # Capture the pre-rebuild ids as plain ints BEFORE the rows are deleted.
+    # Reading cpu.id after the wipe re-queries the row, and what happens then
+    # is dialect-dependent: SQLite reuses rowids once a table is emptied, so
+    # id=1 exists again and the stale object silently resolves to a DIFFERENT
+    # item's row; PostgreSQL sequences don't rewind, so the row is simply
+    # gone and SQLAlchemy raises ObjectDeletedError. The assertion below
+    # wants the ORIGINAL id, not whatever now occupies that slot.
+    old_cpu_id, old_mb_id = cpu.id, mb.id
+    old_run_created_at = run.created_at
+
     _simulate_rebuild(session, ["MB_A", "CPU_A"])  # reversed insert order -> new ids swapped
 
     dropped, superseded = _restore(session, snap)
@@ -79,7 +89,8 @@ def test_adjustment_and_compat_rule_and_audit_log_survive_a_rebuild(session):
 
     new_cpu = session.query(Item).filter_by(canonical_name="CPU_A").one()
     new_mb = session.query(Item).filter_by(canonical_name="MB_A").one()
-    assert new_cpu.id != cpu.id  # ids genuinely changed, proving translation was needed
+    assert new_cpu.id != old_cpu_id  # ids genuinely changed, proving translation was needed
+    assert new_mb.id != old_mb_id
 
     adj = session.query(Adjustment).one()
     assert adj.item_id == new_cpu.id
@@ -103,7 +114,7 @@ def test_adjustment_and_compat_rule_and_audit_log_survive_a_rebuild(session):
 
     restored_run = session.query(ForecastRun).one()
     assert restored_run.note == "original"
-    assert restored_run.created_at == run.created_at
+    assert restored_run.created_at == old_run_created_at
 
 
 def test_rows_for_items_no_longer_present_after_rebuild_are_dropped_not_dangling(session):

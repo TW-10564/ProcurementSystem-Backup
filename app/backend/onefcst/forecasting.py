@@ -54,8 +54,20 @@ def _level_series(session, level: str) -> dict[int, dict[date, float]]:
             .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
             .filter(PlanValue.level == level, PlanValue.item_id.isnot(None),
                     PlanValue.value.isnot(None))
+            # nulls_first() pins SQLite's ordering: it sorts NULLs FIRST on
+            # ASC, PostgreSQL sorts them LAST. This loop takes "later
+            # overwrites", so under PG a snapshot with an unknown file_mtime
+            # would go from "loses to any dated snapshot" to "beats all of
+            # them" — silently feeding a stale value into every forecast for
+            # that (item, month). file_mtime is the one nullable ordering
+            # column in the codebase with NO python-side default (it comes
+            # from a file stat that can fail), so this is reachable, unlike
+            # the created_at/ordered_at columns which default to utcnow.
+            # Same fix as forecast_views._latest_plan_by_month, which this
+            # function's own docstring points at.
             .order_by(PlanValue.item_id, PlanValue.month,
-                     Snapshot.file_mtime.asc(), PlanValue.snapshot_id.asc())
+                     Snapshot.file_mtime.asc().nulls_first(),
+                     PlanValue.snapshot_id.asc())
             .all())
     out: dict[int, dict[date, float]] = {}
     for item_id, month, value, _snapshot_id, _file_mtime in rows:

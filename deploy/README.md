@@ -33,7 +33,7 @@ npm ci
 npm run build          # writes to app/frontend/dist/
 
 # 4. TLS cert (self-signed, internal-network use)
-sudo bash ../../deploy/generate-self-signed-cert.sh onefcst.internal
+sudo bash ../../deploy/generate-self-signed-cert.sh one-forecast.twave.co.jp
 
 # 5. Dedicated non-root service user
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin onefcst
@@ -45,7 +45,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now onefcst-backend
 sudo systemctl status onefcst-backend      # confirm it's running
 
-# 7. nginx — edit server_name in the conf first if not using "onefcst.internal"
+# 7. nginx — edit server_name in the conf first if not using "one-forecast.twave.co.jp"
 sudo cp ../../deploy/nginx-onefcst.conf /etc/nginx/sites-available/onefcst
 sudo ln -s /etc/nginx/sites-available/onefcst /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
@@ -54,9 +54,9 @@ sudo nginx -t && sudo systemctl reload nginx
 ## Verifying it worked
 
 ```bash
-curl -k https://onefcst.internal/api/health        # {"status":"ok",...}
-curl -k https://onefcst.internal/                  # frontend HTML
-# then open https://onefcst.internal/ in a browser — expect a self-signed
+curl -k https://one-forecast.twave.co.jp/api/health        # {"status":"ok",...}
+curl -k https://one-forecast.twave.co.jp/                  # frontend HTML
+# then open https://one-forecast.twave.co.jp/ in a browser — expect a self-signed
 # cert warning (expected, see nginx-onefcst.conf's comment), everything
 # else should behave exactly like local dev.
 ```

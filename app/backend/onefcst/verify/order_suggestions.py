@@ -46,7 +46,12 @@ def _future_demand(session, item_id: int, month_dates: list[date]) -> list[float
            .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
            .filter(PlanValue.item_id == item_id, PlanValue.level.in_(("master", "one_row")),
                    PlanValue.month.in_(month_dates), PlanValue.value.isnot(None))
-           .order_by(PlanValue.month, Snapshot.file_mtime.asc(),
+           # nulls_first() mirrors forecast_views._latest_plan_by_month —
+           # these are deliberately separate code paths (CLAUDE.md
+           # constraint #4) and must stay in sync. SQLite sorts NULLs first
+           # ascending, Postgres last; pin the SQLite order explicitly.
+           .order_by(PlanValue.month,
+                    Snapshot.file_mtime.asc().nulls_first(),
                     PlanValue.snapshot_id.asc())
            .all())
     by_level: dict[str, dict[date, float]] = {"master": {}, "one_row": {}}

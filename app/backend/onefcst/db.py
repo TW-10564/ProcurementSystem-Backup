@@ -20,8 +20,19 @@ _is_sqlite = _url.startswith("sqlite")
 # connection per session — so this only applies to the SQLite path;
 # omitting poolclass for Postgres lets SQLAlchemy use its own QueuePool
 # default.
+# Postgres pool is sized EXPLICITLY rather than taking SQLAlchemy's default
+# (pool_size=5, max_overflow=10). The note above is the reason: report
+# endpoints can hold a session for minutes, so 15 total connections is not
+# much headroom once a few of those overlap with the SPA's normal traffic —
+# and pool exhaustion surfaces as a timeout, i.e. the same empty dashboard
+# the NullPool choice was made to avoid. pool_pre_ping costs one cheap
+# round-trip per checkout and makes a connection dropped by a DB restart or
+# an idle-timeout reconnect transparently instead of erroring.
 engine = (create_engine(_url, future=True, poolclass=NullPool) if _is_sqlite
-         else create_engine(_url, future=True))
+         else create_engine(_url, future=True,
+                            pool_size=10, max_overflow=20,
+                            pool_timeout=30, pool_recycle=1800,
+                            pool_pre_ping=True))
 SessionLocal = sessionmaker(bind=engine, future=True)
 
 

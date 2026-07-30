@@ -46,7 +46,10 @@ function parseMethod(method: string | null): {
   // it survives every suffix combination (tier2_known_plan,
   // tier2_attach_rate+known_plan, +discontinuing, ...).
   const tier2 = method.startsWith("tier2_");
-  let base = method;
+  // explicit `string | null`: the known_plan branch below clears it to null
+  // ("came entirely from the real plan, no statistical method underneath"),
+  // which TS otherwise rejects since the initialiser narrows it to string
+  let base: string | null = method;
   let discontinuing = false;
   let knownPlan = false;
   if (base.endsWith("+discontinuing")) {
@@ -1299,7 +1302,7 @@ export default function Forecast() {
                   ? ` ・ ${t("fc_lead")}: ${t("fc_lead_days", { n: Math.round(detail.item.effective_lead_time_days) })}` +
                     (detail.item.observed_lead_time_days != null &&
                      (detail.item.observed_lead_time_samples ?? 0) >= 3
-                      ? ` (${t("fc_lead_observed", { n: detail.item.observed_lead_time_samples })})`
+                      ? ` (${t("fc_lead_observed", { n: detail.item.observed_lead_time_samples ?? 0 })})`
                       : "")
                   : ""}
                 {detail.stock

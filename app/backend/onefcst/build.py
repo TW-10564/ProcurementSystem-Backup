@@ -4,7 +4,12 @@ Run:  cd app/backend && python3 -m onefcst.build
 """
 from __future__ import annotations
 
+import os
+import re
 from datetime import date, datetime
+
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from .config import ONE_MASTER, NOTE_ONE_MASTER, planning_file, TIER1_CATEGORIES
 from .db import init_db, get_session, engine
@@ -200,10 +205,61 @@ def _check_required_sources() -> None:
             "\n  ".join(missing))
 
 
+def _drop_all_with_lock_timeout() -> None:
+    """drop_all(), but on PostgreSQL bounded by a lock_timeout.
+
+    Why this is not just `Base.metadata.drop_all(engine)`:
+
+    DROP TABLE needs an ACCESS EXCLUSIVE lock. On SQLite the equivalent
+    whole-file write lock made concurrent readers fail fast and noisily
+    ("database is locked") — ugly, but self-resolving. PostgreSQL instead
+    makes the DROP *wait*, indefinitely, behind any transaction still
+    touching those tables — and one report endpoint holding a session (see
+    db.py's note that these can run for minutes) is enough. Worse, PG's
+    lock queue is FIFO: once the DROP is queued, every NEW reader queues
+    behind it too. A five-minute rebuild silently becomes a total outage
+    with nothing in the logs.
+
+    lock_timeout turns that into a fast, loud failure. A DROP that times out
+    leaves the database completely intact — the same "nothing was dropped or
+    modified" stance _check_required_sources() above already takes, which is
+    the right default for a destructive operation.
+
+    SET LOCAL scopes it to this transaction, so it cannot leak into the long
+    ingest that follows.
+    """
+    if engine.dialect.name != "postgresql":
+        Base.metadata.drop_all(engine)
+        return
+
+    # PostgreSQL does not accept a bind parameter for SET, so this value is
+    # interpolated. Validate its shape rather than trusting the environment:
+    # the string reaches the server verbatim, and "operator-controlled" is
+    # not the same as "safe" once it comes from a compose file, a CI
+    # variable, or a copied .env.
+    timeout = os.environ.get("ONEFCST_DROP_LOCK_TIMEOUT", "15s").strip()
+    if not re.fullmatch(r"\d+(ms|s|min)?", timeout):
+        raise RuntimeError(
+            f"ONEFCST_DROP_LOCK_TIMEOUT={timeout!r} is not a valid PostgreSQL "
+            f"interval (e.g. '15s', '500ms', '2min')")
+
+    with engine.begin() as conn:
+        conn.execute(text(f"SET LOCAL lock_timeout = '{timeout}'"))
+        try:
+            Base.metadata.drop_all(bind=conn)
+        except OperationalError as e:
+            raise RuntimeError(
+                f"could not drop tables within {timeout}: another session is "
+                f"holding a lock (most likely an idle-in-transaction report "
+                f"query). Nothing was dropped — the database is intact. "
+                f"Retry once that session ends, or put the app in "
+                f"maintenance mode first. ({e.orig})") from e
+
+
 def run() -> dict:
     print(f"=== onefcst M1 build  {datetime.now():%Y-%m-%d %H:%M} ===")
     _check_required_sources()
-    Base.metadata.drop_all(engine)       # POC: full rebuild each run
+    _drop_all_with_lock_timeout()        # POC: full rebuild each run
     init_db()
 
     report = {"registry": {}, "levels": {}, "subfiles": [], "sap": {},

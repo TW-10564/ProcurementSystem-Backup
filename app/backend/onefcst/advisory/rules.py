@@ -142,7 +142,12 @@ def list_rules(session, status: str | None = None, min_confidence: float | None 
         q = q.filter(CompatRule.confidence >= min_confidence)
     if exclude_origin is not None:
         q = q.filter(CompatRule.origin != exclude_origin)
-    return q.order_by(CompatRule.confidence.desc()).limit(limit).all()
+    # nulls_last(): confidence is nullable, and SQLite puts NULLs last on a
+    # DESC sort while Postgres puts them FIRST — which would float unscored
+    # draft rules to the top of the human review queue ahead of the
+    # high-confidence ones this ordering exists to surface.
+    return (q.order_by(CompatRule.confidence.desc().nulls_last())
+            .limit(limit).all())
 
 
 def bulk_confirm_high_confidence(session, author: str, threshold: float = 0.9) -> int:

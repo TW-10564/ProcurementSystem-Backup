@@ -108,8 +108,17 @@ def trusted_current_balance(stock: StockState | None) -> tuple[float | None, str
 def _stock_by_item(session) -> dict[int, StockState]:
     """Latest stock state per item — see _prefer_sap_row for why this isn't
     simply "newest snapshot_date wins"."""
+    # nulls_first() is explicit on purpose. SQLite sorts NULLs FIRST on an
+    # ascending sort; PostgreSQL sorts them LAST. Since this loop keeps the
+    # LAST acceptable row per item, a NULL-dated row would go from
+    # "overridden by any real row" to "beats every real row" purely by
+    # changing database — and if that row carries a sap_qty, _prefer_sap_row
+    # accepts it and a bogus balance flows into trusted_current_balance and
+    # on into order quantities. Pinning the SQLite semantics keeps behaviour
+    # identical across both engines.
     rows = (session.query(StockState)
-            .order_by(StockState.item_id, StockState.snapshot_date).all())
+            .order_by(StockState.item_id,
+                      StockState.snapshot_date.asc().nulls_first()).all())
     by_item: dict[int, StockState] = {}
     for r in rows:
         if _prefer_sap_row(by_item.get(r.item_id), r):
@@ -121,7 +130,7 @@ def _latest_stock_state(session, item_id: int) -> StockState | None:
     """Single-item equivalent of _stock_by_item, for call sites that only
     need one item's current stock (e.g. item_detail, verify/order_suggestions)."""
     rows = (session.query(StockState).filter(StockState.item_id == item_id)
-           .order_by(StockState.snapshot_date).all())
+           .order_by(StockState.snapshot_date.asc().nulls_first()).all())
     latest: StockState | None = None
     for r in rows:
         if _prefer_sap_row(latest, r):
@@ -481,7 +490,7 @@ def list_forecasts(session, q: str = "", category: str | None = None,
     tier: filters by Item.tier (1 = one of TIER1_CATEGORIES i.e. CPU/VGA/
     MB/Case, 2 = everything else) — a DIFFERENT split from `method`'s
     "tier2" shorthand above. tier=2 is every item purchasing (not
-    経営企画部) owns, most of which still get a real per-SKU forecast from
+    企画部) owns, most of which still get a real per-SKU forecast from
     their own history; method="tier2" is only the minority with no history
     at all, falling back to attach-rate/category-average derivation. Do not
     conflate the two — see project memory on this exact distinction."""
@@ -576,7 +585,8 @@ def _latest_plan_by_month(session, item_id: int, level: str) -> dict[date, float
            .join(Snapshot, Snapshot.id == PlanValue.snapshot_id)
            .filter(PlanValue.item_id == item_id, PlanValue.level == level,
                    PlanValue.value.isnot(None))
-           .order_by(PlanValue.month, Snapshot.file_mtime.asc(),
+           .order_by(PlanValue.month,
+                    Snapshot.file_mtime.asc().nulls_first(),
                     PlanValue.snapshot_id.asc())
            .all())
     out: dict[date, float] = {}

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import type { ReactElement } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useLang } from "../i18n/LanguageContext";
 import type { TranslationKey } from "../i18n/translations";
@@ -18,7 +19,9 @@ import {
 interface NavItem {
   to: string;
   labelKey: TranslationKey;
-  Icon: (props: { className?: string }) => JSX.Element;
+  // React 19 removed the GLOBAL JSX namespace; it now lives under React,
+  // so a bare `JSX.Element` no longer resolves under `tsc -b`.
+  Icon: (props: { className?: string }) => ReactElement;
 }
 
 const NAV: { sectionKey: TranslationKey; items: NavItem[] }[] = [

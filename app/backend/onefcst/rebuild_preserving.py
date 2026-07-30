@@ -85,15 +85,104 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
 from . import build as build_mod
+from . import maintenance
 from . import nas_sync
 from .db import get_session
 from .models import (Item, ForecastRun, Forecast, Adjustment, AccuracyScore,
                      PlannerSnapshot, CompatRule, AuditLog, Actual, WeeklyActual,
                      Suggestion, OrderAction, StockState)
+
+
+def _prune_backups(backup_dir: Path, pattern: str) -> int:
+    """Shared retention for both backup formats — keep the newest
+    ONEFCST_DB_BACKUP_KEEP generations, best-effort."""
+    keep = int(os.environ.get("ONEFCST_DB_BACKUP_KEEP", "7"))
+    existing = sorted(backup_dir.glob(pattern))
+    pruned = 0
+    for old in existing[:-keep] if keep > 0 else []:
+        try:
+            old.unlink()
+            pruned += 1
+        except OSError:
+            pass
+    return pruned
+
+
+def _backup_postgres(database_url: str, backup_dir: Path) -> dict:
+    """pg_dump the whole database to a custom-format archive.
+
+    Same three contracts as the SQLite path, deliberately:
+      * a FAILED dump raises, aborting the rebuild before anything is
+        dropped — the entire point is to never destroy what we cannot
+        recreate;
+      * a truncated/partial file is deleted rather than left looking like a
+        valid backup;
+      * the same ONEFCST_DB_BACKUP_KEEP retention applies.
+
+    -Fc (custom format) rather than plain SQL: it is compressed and restores
+    selectively with pg_restore, which matters because the thing we actually
+    need back in an emergency is a handful of human-data tables, not the
+    60k+ rows of regenerable plan values.
+
+    The password goes through PGPASSWORD in the subprocess environment, not
+    argv — argv is world-readable via /proc on a shared host.
+    """
+    from urllib.parse import unquote, urlparse
+
+    u = urlparse(database_url)
+    if not u.path or u.path == "/":
+        raise RuntimeError(
+            f"pre-rebuild backup failed — no database name in DATABASE_URL "
+            f"({database_url.split('@')[-1]!r}); refusing to drop tables "
+            f"without a backup")
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = backup_dir / f"onefcst-{stamp}.dump"
+
+    cmd = ["pg_dump", "--format=custom", "--no-owner", "--no-acl",
+           "--dbname", u.path.lstrip("/"), "--file", str(dest)]
+    if u.hostname:
+        cmd += ["--host", u.hostname]
+    if u.port:
+        cmd += ["--port", str(u.port)]
+    if u.username:
+        cmd += ["--username", unquote(u.username)]
+
+    env = dict(os.environ)
+    if u.password:
+        env["PGPASSWORD"] = unquote(u.password)
+
+    try:
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True,
+                              timeout=1800)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            "pre-rebuild backup failed — pg_dump not found on PATH. Install "
+            "the postgresql-client package; the rebuild is aborted rather "
+            "than dropping every table with no backup") from e
+    except subprocess.TimeoutExpired as e:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(
+            "pre-rebuild backup failed — pg_dump timed out after 30 min; "
+            "rebuild aborted so the existing data is not dropped") from e
+
+    if proc.returncode != 0 or not dest.exists():
+        dest.unlink(missing_ok=True)          # never leave a truncated backup
+        raise RuntimeError(
+            f"pre-rebuild backup failed (pg_dump exit {proc.returncode}: "
+            f"{(proc.stderr or '').strip()[:300]}) — rebuild aborted so the "
+            f"existing data is not dropped without a copy")
+
+    pruned = _prune_backups(backup_dir, "onefcst-*.dump")
+    return {"status": "ok", "path": str(dest), "bytes": dest.stat().st_size,
+            "kept": int(os.environ.get("ONEFCST_DB_BACKUP_KEEP", "7")),
+            "pruned": pruned, "format": "pg_dump-custom"}
 
 
 def backup_db() -> dict:
@@ -119,14 +208,17 @@ def backup_db() -> dict:
     protect it" must not silently proceed to the drop. A full disk becomes
     a loud, fixable error instead of silent loss.
 
-    Non-SQLite deployments return status="skipped": pg_dump/PITR is the
-    operator's job there and this function must not pretend to cover it.
+    PostgreSQL deployments take the same guarantee via pg_dump — see
+    _backup_postgres. This used to return status="skipped" and let the
+    rebuild proceed, which silently removed the entire protection described
+    above the moment DATABASE_URL pointed at Postgres: run() would carry on
+    to drop_all with no copy of the irreplaceable data anywhere. "skipped"
+    is now reserved for the genuinely-nothing-to-lose case.
     """
     from .config import DATABASE_URL, DB_PATH
 
     if DATABASE_URL and not DATABASE_URL.startswith("sqlite"):
-        return {"status": "skipped",
-                "reason": "non-SQLite database — use pg_dump/PITR instead"}
+        return _backup_postgres(DATABASE_URL, Path(DB_PATH).parent / "backups")
 
     src = Path(DB_PATH)
     if not src.exists():
@@ -159,17 +251,10 @@ def backup_db() -> dict:
     # Retention: the DB is ~31MB, so keep a bounded number of generations
     # rather than growing without limit on a weekly schedule.
     keep = int(os.environ.get("ONEFCST_DB_BACKUP_KEEP", "7"))
-    existing = sorted(backup_dir.glob(f"{src.stem}-*.db"))
-    pruned = []
-    for old in existing[:-keep] if keep > 0 else []:
-        try:
-            old.unlink()
-            pruned.append(old.name)
-        except OSError:
-            pass                               # pruning is best-effort
+    pruned = _prune_backups(backup_dir, f"{src.stem}-*.db")
 
     return {"status": "ok", "path": str(dest), "bytes": dest.stat().st_size,
-            "kept": keep, "pruned": len(pruned)}
+            "kept": keep, "pruned": pruned}
 
 
 def _snapshot(session) -> dict:
@@ -498,15 +583,44 @@ def run() -> dict:
     finally:
         session.close()
 
-    build_report = build_mod.run()
-    build_report["nas_refresh"] = nas_refresh
-    build_report["db_backup"] = db_backup
-
-    session = get_session()
+    # Maintenance mode spans the destructive window. Two reasons, and the
+    # second is the one that matters on PostgreSQL:
+    #   * honesty — between the drop and the restore the API serves a
+    #     half-built database, and users deserve to be told that rather than
+    #     seeing an empty dashboard;
+    #   * lock contention — build.run()'s DROP needs an ACCESS EXCLUSIVE
+    #     lock and PG makes it QUEUE behind any in-flight report session
+    #     instead of failing (see build._drop_all_with_lock_timeout). Not
+    #     admitting new requests first is what stops that queue forming.
+    # Restored in `finally` so an aborted rebuild never strands the app in
+    # maintenance mode. Best-effort: a failure to flip the flag must not
+    # itself abort a rebuild that is otherwise fine.
+    was_on = False
     try:
-        dropped, superseded = _restore(session, snap)
+        was_on = bool(maintenance.get_state().get("enabled"))
+        if not was_on:
+            maintenance.set_state(
+                True, "データ再構築中です。完了までしばらくお待ちください。",
+                by="rebuild")
+    except Exception:                          # noqa: BLE001 — advisory only
+        pass
+
+    try:
+        build_report = build_mod.run()
+        build_report["nas_refresh"] = nas_refresh
+        build_report["db_backup"] = db_backup
+
+        session = get_session()
+        try:
+            dropped, superseded = _restore(session, snap)
+        finally:
+            session.close()
     finally:
-        session.close()
+        if not was_on:
+            try:
+                maintenance.set_state(False, by="rebuild")
+            except Exception:                  # noqa: BLE001
+                pass
 
     build_report["history_preserved"] = {
         "runs": len(snap["runs"]), "forecasts": len(snap["forecasts"]),

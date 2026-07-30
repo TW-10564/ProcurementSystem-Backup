@@ -1,0 +1,60 @@
+# Entra ID SSO overlay — NOT used until the platform team returns the
+# tenant/client/secret and the roles.
+#
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.sso.yml up -d
+#
+# Then uncomment the auth_request block in deploy/nginx-onefcst-docker.conf
+# and reload nginx. Order matters: start oauth2-proxy FIRST, confirm
+# http://127.0.0.1:4180/ping answers, and only then turn nginx on — an
+# auth_request pointing at a dead upstream 500s every request.
+#
+# WHY A PROXY RATHER THAN OIDC INSIDE FastAPI:
+#   * the app is a confidential client, so the token exchange must happen
+#     server-side; oauth2-proxy is purpose-built for exactly that, in front,
+#     with no application code;
+#   * it means the SPA needs no MSAL bundle and no token handling in the
+#     browser at all — the session is a signed cookie nginx validates;
+#   * the API-key gate underneath stays untouched, so nothing regresses if
+#     SSO is turned off again.
+#
+# NOTE: this authenticates. It does not yet AUTHORIZE — the app has no
+# concept of users or roles today (single shared API key). oauth2-proxy will
+# pass the Entra role claim through as X-Forwarded-Roles, but nothing reads
+# it yet. Enforcing per-department permissions is follow-on work.
+
+services:
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    restart: unless-stopped
+    command:
+      - --provider=oidc
+      - --provider-display-name=Microsoft Entra ID
+      - --oidc-issuer-url=https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0
+      - --client-id=${ENTRA_CLIENT_ID}
+      - --client-secret=${ENTRA_CLIENT_SECRET}
+      - --redirect-url=${ENTRA_REDIRECT_URI}
+      # listen on loopback only; nginx is the sole entry point
+      - --http-address=0.0.0.0:4180
+      - --reverse-proxy=true
+      # we terminate TLS at nginx, so the cookie must still be marked secure
+      - --cookie-secure=true
+      - --cookie-secret=${ENTRA_COOKIE_SECRET}
+      - --cookie-expire=8h
+      # everyone in the tenant who is ASSIGNED the app registration; Entra
+      # enforces the assignment, so no email-domain allowlist is needed
+      - --email-domain=*
+      # pass identity to the app — X-Forwarded-User / -Email / -Groups
+      - --set-xauthrequest=true
+      - --pass-access-token=false
+      # ask for the role claim so per-department authorization can be built
+      # on top later without another registration change
+      - --scope=openid profile email
+    environment:
+      TZ: ${TZ:-Asia/Tokyo}
+    ports:
+      - "127.0.0.1:4180:4180"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4180/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

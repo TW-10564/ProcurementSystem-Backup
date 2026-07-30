@@ -67,7 +67,7 @@ def export_compat_rules(status: str | None = None) -> Path:
     q = session.query(CompatRule)
     if status:
         q = q.filter(CompatRule.status == status)
-    rows = q.order_by(CompatRule.confidence.desc()).all()
+    rows = q.order_by(CompatRule.confidence.desc().nulls_last()).all()
     items = {i.id: i.canonical_name for i in session.query(Item).all()}
     session.close()
     wb, ws = _new_wb("互換性ルール")
@@ -143,7 +143,7 @@ def export_audit_log(limit: int = 500) -> Path:
 
 
 # Ownership-tier labels for the forecast export (Item.tier: 1 = the four
-# categories 経営企画部 plans directly, 2 = everything purchasing derives).
+# categories 企画部 plans directly, 2 = everything purchasing derives).
 # Keep in sync with config.TIER1_CATEGORIES.
 _TIER_SCOPE = {
     None: ("全部材", "全部材（企画4部材＋購買部材）"),

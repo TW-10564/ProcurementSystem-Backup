@@ -1,6 +1,6 @@
 """Regression tests for FIX_PLAN H1 (NULL master value crashes the mismatch
 gate) and H2 (the acceptance test could only ever print PASS, or crash)."""
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -144,3 +144,43 @@ def test_conflicting_confirmed_rules_stay_unclassified_not_guessed(session):
         assert g["cpu_demand"] == 0.0            # never counted toward either socket
 
 
+
+
+def test_latest_master_month_falls_back_to_nearest_when_current_is_missing(session):
+    """The nearest-month fallback in _latest_master_month had NO coverage —
+    every existing test seeds the current month, so only the `exact` fast
+    path ever ran. That mattered because the fallback used to sort with
+    func.julianday(), which exists in SQLite but NOT in PostgreSQL: the
+    branch would pass CI forever and then raise UndefinedFunction in
+    production the first month the master sheet lagged.
+
+    Seeds ONLY past months so the fallback is the code path under test.
+    """
+    from onefcst.verify.mismatch import _latest_master_month
+
+    today = date.today().replace(day=1)
+    two_back = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+    five_back = two_back
+    for _ in range(3):
+        five_back = (five_back.replace(day=1) - timedelta(days=1)).replace(day=1)
+
+    item = Item(canonical_name="Ry79800X3D", category="CPU", kind="part")
+    session.add(item)
+    snap = Snapshot(source_file="ONE計画.xlsm")
+    session.add(snap)
+    session.flush()
+    # deliberately inserted oldest-first so a "just take the first row"
+    # implementation would pick the wrong one
+    for m in (five_back, two_back):
+        session.add(PlanValue(snapshot_id=snap.id, item_id=item.id, month=m,
+                              level="master", value=100.0))
+    session.commit()
+
+    assert _latest_master_month(session) == two_back
+
+
+def test_latest_master_month_returns_today_when_there_is_no_master_data(session):
+    """No master rows at all — must not raise, must not return None."""
+    from onefcst.verify.mismatch import _latest_master_month
+
+    assert _latest_master_month(session) == date.today().replace(day=1)

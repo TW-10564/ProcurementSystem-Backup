@@ -42,6 +42,57 @@ cd app/backend && python3 -m pytest tests/ -q
 Start both servers with `run_in_background: true` (not bare `nohup` — see
 project memory `running-portal` for why nohup fails in this environment).
 
+### Database backend — SQLite *or* PostgreSQL
+
+`db.py` picks the backend from `DATABASE_URL`; unset it and you are on the
+SQLite file at `app/data/onefcst.db` (the dev/rollback path, unchanged).
+Set it (`postgresql+psycopg://…`) and the same code runs on Postgres 17 with
+an explicit 10+20 pool and `pool_pre_ping`. Both are supported and both must
+keep working — the test suite runs on either via `ONEFCST_TEST_DATABASE_URL`:
+
+```bash
+cd app/backend && ONEFCST_TEST_DATABASE_URL=postgresql+psycopg://… python3 -m pytest tests/ -q
+```
+
+Portability rules that apply to *all* new query code:
+- **Never** use SQLite-only SQL functions (`julianday`, `strftime`) — they
+  raise `UndefinedFunction` on Postgres. Fallback branches count; one of these
+  shipped untested for months.
+- **Always** pin NULL ordering explicitly with `.nulls_first()` /
+  `.nulls_last()`. SQLite sorts NULLs first on ASC, Postgres last — in the
+  "last row wins" loops this codebase uses, that silently inverts which row
+  wins (it reached order quantities via `forecast_views._stock_by_item`).
+- String sort order also differs (byte order vs locale); display-only.
+
+One-time SQLite → Postgres data migration (dry-run by default, verifies by
+content not count):
+
+```bash
+cd app/backend && python3 -m onefcst.migrate_to_postgres            # dry run
+cd app/backend && python3 -m onefcst.migrate_to_postgres --commit
+```
+
+### Docker deployment
+
+`Dockerfile` + `docker-compose.yml` build one multi-stage image that serves
+both the API and the built SPA on 8600, with Postgres alongside; nginx stays
+on the *host*. Runbook, NAS mount unit, nginx config and the oauth2-proxy SSO
+overlay are all in `deploy/` — start from `deploy/README-docker.md`.
+
+Deployment gotchas that have already bitten:
+- **One uvicorn worker only.** Two would run two schedulers and could drop
+  the database concurrently. Never add `--workers`.
+- **Code changes need a container restart** — the scheduler holds imported
+  modules in memory, so an auto-rebuild can resurrect a bug already fixed on
+  disk.
+- **Rotating `ONEFCST_API_KEY` requires an image rebuild** — `VITE_API_KEY`
+  is compiled into the JS bundle.
+- **Check the frontend with `npm run build`, not `vite build`.**
+  `tsc --noEmit -p tsconfig.json` checks nothing here (solution file with
+  references only) and will mask real type errors.
+- `ONEFCST_NAS_MODE=mount` makes a missing/empty NAS mount an error rather
+  than the old silent skip (`nas_sync.py`).
+
 ---
 
 ## Architecture — `app/` (active product)
@@ -105,7 +156,7 @@ deploy this off localhost without setting it. CORS defaults to localhost-only
 (`config.CORS_ORIGINS`, no more wildcard) — set `ONEFCST_CORS_ORIGINS` to the
 real deployed dashboard origin(s) before hosting anywhere else.
 
-**Two-tier forecast architecture**: planning dept (経営企画部) plans only
+**Two-tier forecast architecture**: planning dept (企画部) plans only
 VGA/CPU/MB/Case — the demand-driving categories (`engine/baseline.py` +
 `forecasting.py`, planning-facing). Purchasing derives everything else (RAM,
 PSU, cables, mouse/KB, FAN, SSD/HDD, OS, 梱包, etc.) via attach-rate/compat
@@ -199,6 +250,12 @@ apt-get install -y mdbtools`) for reading the live SAP stock source
 (`SAP在庫抽出.accdb`, an Access DB — see `ingestion/sap.py`); soft
 dependency, falls back to an xlsx snapshot if unavailable. `app/frontend`:
 React + TS + Vite (see `app/frontend/package.json`).
+
+For the Postgres backend: `psycopg[binary]`, plus the `pg_dump` client binary
+— `rebuild_preserving.backup_db()` shells out to `pg_dump -Fc` and now
+**raises** on every failure mode instead of returning `"skipped"`. That means
+a failed backup aborts the rebuild by design; if rebuilds start failing, check
+`pg_dump` availability and disk space first.
 
 ---
 

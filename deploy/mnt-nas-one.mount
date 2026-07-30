@@ -1,0 +1,50 @@
+# NAS share (ONE source files), read-only, for the DGX.
+#
+# Install:
+#   sudo cp deploy/mnt-nas-one.mount /etc/systemd/system/
+#   sudo mkdir -p /mnt/nas/one
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mnt-nas-one.mount
+#
+# The filename MUST match the mount point: /mnt/nas/one -> mnt-nas-one.mount.
+# Rename both together if you mount somewhere else.
+#
+# Requires: apt-get install -y cifs-utils
+# Credentials: /etc/onefcst/nas.cred, root-owned, chmod 600 —
+#   username=<AD service account>
+#   password=<...>
+#   domain=<AD domain>
+
+[Unit]
+Description=ONE procurement NAS share (read-only)
+# The share is on the LAN, so wait for real connectivity rather than just
+# "network.target", which fires before an address is assigned.
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=//172.25.20.11/サードウェーブグループ
+Where=/mnt/nas/one
+Type=cifs
+
+# ro         — Phase-1 rule: ONE source files are NEVER written by this
+#              system (CLAUDE.md constraint #1: a no-op openpyxl save strips
+#              every cached formula value). Enforced by the kernel here, not
+#              just by convention in the code.
+# iocharset=utf8
+#            — LOAD-BEARING. Every path in this system is Japanese
+#              (ONE計画.xlsm, ★週頭在庫(ZM13), 【通常業務】). Without it
+#              filenames come back mangled and config.py's globs silently
+#              match NOTHING — the build fails with "missing source file"
+#              while the files are plainly there on the share.
+# vers=3.1.1 — modern SMB. Drop to 3.0 only if the NAS refuses to negotiate.
+# uid/gid    — the container runs as uid 10001 (see Dockerfile); files must
+#              be readable by it through the bind mount.
+# nofail     — a NAS outage must not stop the DGX from booting.
+# _netdev    — tells systemd this needs the network before mounting.
+Options=ro,credentials=/etc/onefcst/nas.cred,iocharset=utf8,vers=3.1.1,uid=10001,gid=10001,file_mode=0440,dir_mode=0550,nofail,_netdev
+
+TimeoutSec=30
+
+[Install]
+WantedBy=multi-user.target

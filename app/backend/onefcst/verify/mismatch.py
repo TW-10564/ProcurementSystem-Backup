@@ -21,8 +21,6 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import func
-
 from ..config import ONE_DIR
 from ..db import get_session
 from ..models import Item, PlanValue, CompatRule
@@ -76,10 +74,23 @@ def _latest_master_month(session) -> date:
         PlanValue.level == "master", PlanValue.month == today).first()
     if exact:
         return today
-    nearest = (session.query(PlanValue.month).filter(PlanValue.level == "master")
-              .order_by(func.abs(func.julianday(PlanValue.month) -
-                                 func.julianday(today.isoformat()))).first())
-    return nearest[0] if nearest else today
+    # Nearest-month pick is done in Python, not SQL. This used to sort by
+    # func.julianday(), which exists ONLY in SQLite — under PostgreSQL it
+    # raises UndefinedFunction. Worse, this is the fallback branch (reached
+    # only when the current month has no master rows at all), so the failure
+    # would not surface in any test and would first appear in production at
+    # a month boundary. The candidate set is one row per distinct month —
+    # tens of values — so sorting it here costs nothing and is dialect-free.
+    # (SQLite hands Date columns back as ISO strings, Postgres as real
+    # date objects — normalise before arithmetic, same as
+    # forecast_views._as_date does for its own query results.)
+    months = [date.fromisoformat(m) if isinstance(m, str) else m
+              for (m,) in session.query(PlanValue.month)
+              .filter(PlanValue.level == "master").distinct().all()
+              if m is not None]
+    if not months:
+        return today
+    return min(months, key=lambda m: abs((m - today).days))
 
 
 def compute_mismatch(session) -> dict:

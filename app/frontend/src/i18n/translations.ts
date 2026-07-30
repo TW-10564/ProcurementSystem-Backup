@@ -447,8 +447,8 @@ export const translations = {
   fc_th_tier: { ja: "区分", en: "Tier" },
   fc_tier_filter_1: { ja: "計画部門（4部材）", en: "Planning dept (4 parts)" },
   fc_tier_filter_1_tooltip: {
-    ja: "経営企画部が直接計画する4カテゴリ（CPU・グラフィックカード・マザーボード・ケース）のみ表示",
-    en: "Show only the 4 categories 経営企画部 plans directly: CPU, GPU, motherboard, case",
+    ja: "企画部が直接計画する4カテゴリ（CPU・グラフィックカード・マザーボード・ケース）のみ表示",
+    en: "Show only the 4 categories 企画部 plans directly: CPU, GPU, motherboard, case",
   },
   fc_tier_filter_2: { ja: "購買部門（その他全部材）", en: "Purchasing dept (everything else)" },
   fc_tier_filter_2_tooltip: {
@@ -743,7 +743,7 @@ export const translations = {
   // ── Help / How to Use ────────────────────────────────────────────────
   help_title: { ja: "使い方ガイド", en: "How to Use This System" },
   help_sub: {
-    ja: "購買本部・経営企画部の担当者向けの操作ガイドです。デモ動画で全体の流れを確認し、下の解説で予測精度の指標（WAPE）の読み方を確認してください。",
+    ja: "購買本部・企画部の担当者向けの操作ガイドです。デモ動画で全体の流れを確認し、下の解説で予測精度の指標（WAPE）の読み方を確認してください。",
     en: "A walkthrough for the purchasing and planning teams. Watch the demo for the overall flow, then read the section below on how to read the forecast-accuracy figure (WAPE).",
   },
 

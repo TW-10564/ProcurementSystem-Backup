@@ -1,0 +1,38 @@
+# Build context exclusions. Without these the context is ~400 MB and the
+# image would bake in data that must come from mounts instead.
+
+# 101 MB, rebuilt inside the frontend stage by `npm ci`
+app/frontend/node_modules
+app/frontend/dist
+
+# The app's own writable store — a runtime VOLUME, never image content.
+# Baking onefcst.db in would ship stale data and mask a missing mount.
+app/data
+
+# Read-only NAS sources (~200 MB). These are bind-mounted at run time; see
+# ONE_SOURCE_DIR / PLANNING_DIR / SAP_DIR in the compose file.
+ONE/
+data/
+*.accdb
+*.db
+
+# secrets — supplied via env_file / compose, never copied into a layer
+.env
+app/backend/.env
+app/backend/.env.production
+app/frontend/.env
+app/frontend/.env.production
+deploy/tls/
+
+.git
+.gitignore
+.claude
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+
+# not needed at runtime
+presentation_materials/
+*.md
+!app/frontend/public/help/README.md
