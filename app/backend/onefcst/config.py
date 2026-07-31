@@ -293,6 +293,15 @@ ENTRA_ALLOWED_EMAILS = [e.strip().lower() for e in os.environ.get(
 
 ENTRA_ENABLED = bool(ENTRA_TENANT_ID and ENTRA_CLIENT_ID)
 
+
+# Addresses that are ALWAYS administrators, regardless of the user_access
+# table. This exists to break a chicken-and-egg problem: the permissions
+# roster lives in the database, and somebody has to be able to edit it before
+# anyone is in it. Keep it to one or two people — it is the recovery path if
+# the last admin row is deleted by mistake, so it must not be routine access.
+BOOTSTRAP_ADMINS = [e.strip().lower() for e in os.environ.get(
+    "ONEFCST_BOOTSTRAP_ADMINS", "").split(",") if e.strip()]
+
 # --- rate limiting ----------------------------------------------------------
 # Basic per-client request cap (see api/rate_limit.py) — added 2026-07-23 as
 # the cheapest defense against a leaked/guessed ONEFCST_API_KEY being

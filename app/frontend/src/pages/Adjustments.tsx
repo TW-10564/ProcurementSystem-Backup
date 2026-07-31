@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import AuthorName, { useAuthorInitials } from "../components/AuthorName";
+import { useIdentity, useMyName } from "../auth/IdentityContext";
+import { ssoEnabled } from "../auth/msal";
 import { api, downloadReport } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 import type { Adjustment } from "../api/types";
@@ -21,6 +24,11 @@ function initials(name: string): string {
 
 export default function Adjustments() {
   const { t, lang } = useLang();
+  // Initials from the resolved directory name, not the mail alias.
+  const authorInitials = useAuthorInitials();
+  const myName = useMyName();
+  const { me } = useIdentity();
+  const myDept = me?.profile?.department ?? "";
   const [list, setList] = useState<Adjustment[]>([]);
   const [query, setQuery] = useState("");
   const [options, setOptions] = useState<ItemOption[]>([]);
@@ -74,7 +82,7 @@ export default function Adjustments() {
         author: form.author,
       });
       setMessage(t("adj_saved"));
-      localStorage.setItem("onefcst_author", form.author);
+      if (!ssoEnabled) localStorage.setItem("onefcst_author", form.author);
       setForm({ ...form, reason: "", new_value: "", old_value: "" });
       load();
     } catch (err: unknown) {
@@ -213,16 +221,36 @@ export default function Adjustments() {
                   placeholder={t("adj_reason_placeholder")}
                 />
               </div>
+              {/* Under SSO the author is NOT a form field. The server takes it
+                  from the verified token and discards whatever we send
+                  (api/auth.py:effective_author), so an editable box would be
+                  actively misleading: you could type a colleague's name and
+                  the record would still say you. Shown read-only instead, as
+                  the confirmation of whose name is going on the record — the
+                  point of the whole control on a shared PC.
+                  Still editable pre-SSO, where the server has nothing better
+                  to go on than what we send. */}
               <div className="field span2">
                 <label>{t("common_author_label")}</label>
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span className="avatar">{initials(form.author)}</span>
-                  <input
-                    required
-                    style={{ flex: 1 }}
-                    value={form.author}
-                    onChange={(e) => setForm({ ...form, author: e.target.value })}
-                  />
+                  <span className="avatar">
+                    {ssoEnabled ? authorInitials(form.author) : initials(form.author)}
+                  </span>
+                  {ssoEnabled ? (
+                    <div className="author-fixed">
+                      <span className="author-fixed-name">
+                        {myName || form.author}
+                      </span>
+                      {myDept && <span className="author-fixed-sub">{myDept}</span>}
+                    </div>
+                  ) : (
+                    <input
+                      required
+                      style={{ flex: 1 }}
+                      value={form.author}
+                      onChange={(e) => setForm({ ...form, author: e.target.value })}
+                    />
+                  )}
                 </div>
               </div>
             </div>
@@ -283,7 +311,7 @@ export default function Adjustments() {
                 return (
                   <div className="list-row" key={a.id}>
                     <span className="avatar" title={a.author}>
-                      {initials(a.author)}
+                      {authorInitials(a.author)}
                     </span>
                     <div className="grow">
                       <div className="ttl">
@@ -312,7 +340,7 @@ export default function Adjustments() {
                         {a.reason}
                         <span className="dim">
                           {" "}
-                          · {a.author} · {scopeLabel(a.scope)}
+                          · <AuthorName author={a.author} /> · {scopeLabel(a.scope)}
                         </span>
                       </div>
                     </div>

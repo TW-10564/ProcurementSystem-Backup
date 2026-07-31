@@ -55,7 +55,13 @@ from .rebuild_preserving import _restore, _snapshot         # noqa: E402
 # The buckets worth reporting on: everything a human created by hand, plus
 # the accuracy history that would take months of real runs to rebuild.
 HUMAN_DATA = ("adjustments", "compat_rules", "audit_log", "order_actions",
-              "eol_flags", "discontinuation_suggestions", "scores", "runs")
+              "eol_flags", "discontinuation_suggestions", "scores", "runs",
+              # Azure display names behind every author email above. Migrated
+              # by the shared _snapshot/_restore either way; listed here so a
+              # dry run REPORTS them, because "0 user_profiles" is the visible
+              # symptom of a migration that lost the audit trail's readability.
+              "user_profiles", "user_access", "user_scopes",
+              "item_scope_overrides")
 
 
 def _sqlite_session(path):

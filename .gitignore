@@ -82,3 +82,8 @@ INSTALL_INSTRUCTIONS*.txt
 
 # local SSO trial env (real tenant/client values)
 deploy/.env.sso.local
+
+# Real staff roster (names + work addresses). The loader consumes it; the
+# repo keeps only deploy/roster.example.csv. Personal data in git history is
+# the same class of problem as the SAP .accdb in audit finding F3 — permanent.
+deploy/roster.csv

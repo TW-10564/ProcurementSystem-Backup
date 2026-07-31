@@ -9,6 +9,37 @@ from pydantic import BaseModel, Field
 from ..timeutil import UtcDatetime
 
 
+class GraphProfileIn(BaseModel):
+    """The subset of Microsoft Graph's `/me` the SPA may forward.
+
+    Explicitly modelled rather than accepted as a bare `dict` (the mistake
+    audit finding F8 flagged on `POST /maintenance`): this is client-supplied
+    input, so it gets length limits and a closed field list. The caller's
+    EMAIL is deliberately absent — it comes from the verified token, never
+    from the body, so nobody can write a profile for a colleague.
+    """
+    display_name: str | None = Field(default=None, max_length=200)
+    given_name: str | None = Field(default=None, max_length=100)
+    surname: str | None = Field(default=None, max_length=100)
+    job_title: str | None = Field(default=None, max_length=200)
+    department: str | None = Field(default=None, max_length=200)
+    office_location: str | None = Field(default=None, max_length=200)
+
+
+class AccessGrantIn(BaseModel):
+    """Admin grants a role, and (for purchasing) the sub-files they own."""
+    email: str = Field(max_length=320)
+    role: str = Field(max_length=20)            # admin | purchasing | planning
+    scopes: list[str] = Field(default_factory=list, max_length=20)
+    note: str | None = Field(default=None, max_length=200)
+
+
+class ItemScopeIn(BaseModel):
+    """Admin hand-assigns an unowned part to a sub-file owner group."""
+    canonical_name: str = Field(max_length=200)
+    scope_key: str = Field(max_length=60)
+
+
 class CompatRuleOut(BaseModel):
     id: int
     part_a_id: int

@@ -85,7 +85,7 @@ def test_blank_author_without_an_identity_becomes_unknown():
 # ------------------------------------------------------ through HTTP ---
 
 @pytest.fixture
-def sso_client(monkeypatch, jwks):                                # noqa: F811
+def sso_client(monkeypatch, jwks, isolated_api_db):                                # noqa: F811
     from fastapi.testclient import TestClient
     from onefcst.api.main import app
     monkeypatch.setattr(config, "ENTRA_TENANT_ID", TENANT)
@@ -95,6 +95,8 @@ def sso_client(monkeypatch, jwks):                                # noqa: F811
     monkeypatch.setattr(config, "ENTRA_ALLOWED_EMAILS", [])
     monkeypatch.setattr(auth_mod, "API_KEY", "")
     entra.reset_signing_keys(entra._test_signing_keys(jwks))
+    # isolated_api_db: /me upserts a profile — without it this writes a
+    # test user into the developer's real database. See conftest.
     yield TestClient(app)
     entra.reset_signing_keys(None)
 

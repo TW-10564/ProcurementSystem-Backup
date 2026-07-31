@@ -130,3 +130,40 @@ def _pg_backed_sqlite_engines():
                             f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
                 except Exception:              # noqa: BLE001 — cleanup only
                     pass
+
+
+@pytest.fixture
+def isolated_api_db():
+    """A TestClient-safe throwaway database for the app's `db()` dependency.
+
+    Any test that drives an endpoint through TestClient runs the app's REAL
+    `db()` dependency, which means it writes to the developer's actual
+    app/data/onefcst.db. That was harmless while every such test was read-only.
+    `GET /me` is not: it upserts a UserProfile, so simply running the suite
+    added a fictional 田中 太郎 to the dev database and to the name directory
+    the audit trail renders from (found 2026-07-31).
+
+    Request this fixture from any client fixture that touches a WRITING
+    endpoint. Not autouse: the real-data integration tests deliberately read
+    the built database, and blanket-overriding it would make them assert
+    against an empty schema.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from onefcst.api import main as main_mod
+    from onefcst.models import Base
+
+    # StaticPool + check_same_thread: TestClient serves requests on a worker
+    # thread, and a default in-memory SQLite connection is neither shared with
+    # nor usable from it.
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+
+    main_mod.app.dependency_overrides[main_mod.db] = lambda: session
+    yield session
+    main_mod.app.dependency_overrides.pop(main_mod.db, None)
+    session.close()

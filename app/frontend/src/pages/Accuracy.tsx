@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, downloadReport } from "../api/client";
+import { api } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 import type { BacktestReport, PlannerAccuracy, SalesReconciliationReport, StockReconciliationReport } from "../api/types";
 
@@ -414,9 +414,6 @@ export default function Accuracy() {
             <h3>{t("fva_title")}</h3>
             <div className="desc">{t("fva_desc")}</div>
           </div>
-          <button className="btn" onClick={() => downloadReport("/export/adjustments", "adjustments.xlsx")}>
-            {t("fva_download")}
-          </button>
         </div>
         <div style={{ padding: "18px 24px" }}>
           {!fva ? (
@@ -485,9 +482,6 @@ export default function Accuracy() {
                 <h3>{t("accuracy_wape_title")}</h3>
                 <div className="desc">{t("accuracy_wape_desc", { n: report.n_periods })}</div>
               </div>
-              <button className="btn" onClick={() => downloadReport("/export/backtest", "backtest.xlsx")}>
-                {t("common_download_excel")}
-              </button>
             </div>
             <div style={{ padding: "20px 24px", display: "grid", gap: 18 }}>
               <div>

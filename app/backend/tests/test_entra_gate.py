@@ -20,7 +20,9 @@ from test_entra_auth import (CLIENT, KID, TENANT, jwks, keypair,  # noqa: F401
 
 
 @pytest.fixture
-def client():
+def client(isolated_api_db):
+    # isolated_api_db: /me upserts a profile, so without it this fixture writes
+    # a test user into the developer's real database. See conftest.
     return TestClient(app)
 
 

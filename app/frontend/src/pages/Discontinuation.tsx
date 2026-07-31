@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
 import type { DiscontinuationReport, DiscontinuationSuggestion } from "../api/types";
 import { authorIsSelfAsserted, currentAuthor } from "../auth/author";
+import { AuthorChip } from "../components/AuthorName";
 
 const AUTHOR_KEY = "onefcst_author";
 
@@ -116,29 +117,13 @@ function ReviewQueue() {
           ))}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: "auto" }}>
-          <span className="avatar" title={t("common_author_label")}>
-            {author ? author.slice(0, 2).toUpperCase() : "？"}
-          </span>
-          {/* Editable only when nobody has signed in — under SSO the server
-              takes the author from the verified token and ignores this value. */}
-          {authorIsSelfAsserted() ? (
-            <input
-              value={author}
-              onChange={(e) => setAuthor(e.target.value)}
-              placeholder={t("compat_author_placeholder")}
-              aria-label={t("common_author_label")}
-              style={{ width: 180 }}
-            />
-          ) : (
-            <span
-              title={t("common_author_label")}
-              style={{ fontSize: "0.8rem", color: "#475569", maxWidth: 200,
-                       overflow: "hidden", textOverflow: "ellipsis",
-                       whiteSpace: "nowrap" }}
-            >
-              {author}
-            </span>
-          )}
+          <AuthorChip
+            author={author}
+            setAuthor={setAuthor}
+            editable={authorIsSelfAsserted()}
+            label={t("common_author_label")}
+            placeholder={t("compat_author_placeholder")}
+          />
         </div>
       </div>
 

@@ -428,3 +428,45 @@ export interface BacktestReport {
   rows: BacktestRow[];
   winner: string;
 }
+
+/**
+ * The signed-in employee, as the SERVER sees them.
+ *
+ * `source` is the field that matters operationally: `entra` means a verified
+ * Microsoft token, so writes are attributed to a real person. `api-key` means
+ * the browser is not sending a token and everything lands anonymously — the
+ * first thing to check when the audit log looks wrong.
+ */
+export interface Me {
+  authenticated: boolean;
+  source: "entra" | "api-key" | "open";
+  name?: string;
+  email?: string;
+  oid?: string;
+  groups?: string[];
+  roles?: string[];
+  audit_author?: string;
+  profile?: UserProfile;
+}
+
+/** Azure directory details, cached server-side against an email address. */
+export interface UserProfile {
+  email?: string;
+  display_name?: string | null;
+  given_name?: string | null;
+  surname?: string | null;
+  job_title?: string | null;
+  department?: string | null;
+  office_location?: string | null;
+  /** "graph" = full directory record; "token" = ID-token claims only. */
+  source?: string;
+  updated_at?: string | null;
+}
+
+/** One row of the email → name lookup used to render `author` strings. */
+export interface DirectoryUser {
+  email: string;
+  display_name: string | null;
+  job_title: string | null;
+  department: string | null;
+}

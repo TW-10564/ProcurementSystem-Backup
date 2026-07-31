@@ -73,12 +73,22 @@ def export_compat_rules(status: str | None = None) -> Path:
     wb, ws = _new_wb("互換性ルール")
     ws.append([f"部材互換性ルール一覧（{status or '全件'}） — 出力日時: {datetime.now():%Y-%m-%d %H:%M}"])
     ws.append([])
-    _header(ws, ["CPU", "マザーボード", "関係", "信頼度", "提案元", "状態", "承認者"])
+    # 部材A/部材B rather than CPU/マザーボード: the schema is a generic
+    # part_a/part_b pair, and every rule happens to be a CPU↔MB pair only
+    # because that is all the drafting has covered so far. Hardcoded category
+    # names would silently mislabel the first rule between any other pair.
+    _header(ws, ["部材A", "部材B", "関係", "信頼度", "提案元", "状態", "承認者"])
     for r in rows:
         ws.append([items.get(r.part_a_id, "?"), items.get(r.part_b_id, "?"), r.relation,
                   r.confidence, r.origin, r.status, r.confirmed_by or ""])
     _autosize(ws, (18, 18, 10, 10, 16, 12, 16))
-    out = EXPORT_DIR / f"互換性ルール_{date.today():%Y%m%d}.xlsx"
+    # The status belongs in the FILENAME, not only in the title row: the UI
+    # exports whatever filter is on screen, so without it a buyer who saves
+    # drafts and then confirmed ends up with "…(1).xlsx" and no way to tell
+    # the two apart outside the portal.
+    label = {"draft": "未確認", "confirmed": "確認済", "rejected": "却下"}.get(
+        status or "", "全件")
+    out = EXPORT_DIR / f"互換性ルール_{label}_{date.today():%Y%m%d}.xlsx"
     wb.save(out)
     return out
 

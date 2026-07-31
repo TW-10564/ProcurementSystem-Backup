@@ -11,6 +11,9 @@ import Adjustments from "./pages/Adjustments";
 import Notifications from "./pages/Notifications";
 import Discontinuation from "./pages/Discontinuation";
 import Help from "./pages/Help";
+import Profile from "./pages/Profile";
+import AuthGate from "./auth/AuthGate";
+import { IdentityProvider } from "./auth/IdentityContext";
 
 function App() {
   return (
@@ -20,7 +23,22 @@ function App() {
       <MaintenanceGate>
       <Routes>
         <Route path="/" element={<Landing />} />
-        <Route path="/app" element={<Layout />}>
+        {/* Sign-in is required for the app, NOT for the site. Gating "/" too
+            meant a signed-out visitor could never see the landing page: Entra
+            returned them to the origin and the gate bounced them straight back
+            to Microsoft, so "log out" appeared to dump the user on an account
+            picker. IdentityProvider sits inside the gate because /me needs a
+            token. */}
+        <Route
+          path="/app"
+          element={
+            <AuthGate>
+              <IdentityProvider>
+                <Layout />
+              </IdentityProvider>
+            </AuthGate>
+          }
+        >
           <Route index element={<Dashboard />} />
           <Route path="forecast" element={<Forecast />} />
           <Route path="accuracy" element={<Accuracy />} />
@@ -30,6 +48,7 @@ function App() {
           <Route path="adjustments" element={<Adjustments />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="help" element={<Help />} />
+          <Route path="profile" element={<Profile />} />
         </Route>
 
         {/* pre-2026-07-21 bookmarks pointed at these top-level paths directly

@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { LanguageProvider } from './i18n/LanguageContext'
-import AuthGate from './auth/AuthGate'
 import { initializeMsal } from './auth/msal'
 
 // MSAL must finish initialize() and handleRedirectPromise() BEFORE React
@@ -16,14 +15,16 @@ import { initializeMsal } from './auth/msal'
 // A no-op when SSO is not configured, so the pre-SSO startup path is unchanged.
 // .finally, not .then: if initialisation fails the app must still render and
 // say so through AuthGate's error component, rather than leaving a blank page.
+//
+// AuthGate itself now lives INSIDE the router (App.tsx), wrapping only /app —
+// the public landing page at "/" must render for a signed-out visitor, which
+// is impossible if the gate is above the router and redirects them first.
 initializeMsal().finally(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <AuthGate>
-        <LanguageProvider>
-          <App />
-        </LanguageProvider>
-      </AuthGate>
+      <LanguageProvider>
+        <App />
+      </LanguageProvider>
     </StrictMode>,
   )
 })

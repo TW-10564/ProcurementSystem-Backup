@@ -94,7 +94,8 @@ from . import nas_sync
 from .db import get_session
 from .models import (Item, ForecastRun, Forecast, Adjustment, AccuracyScore,
                      PlannerSnapshot, CompatRule, AuditLog, Actual, WeeklyActual,
-                     Suggestion, OrderAction, StockState)
+                     Suggestion, OrderAction, StockState, UserProfile,
+                     UserAccess, UserScope, ItemScopeOverride)
 
 
 def _prune_backups(backup_dir: Path, pattern: str) -> int:
@@ -311,6 +312,39 @@ def _snapshot(session) -> dict:
         {"who": a.who, "what": a.what, "before": a.before, "after": a.after, "at": a.at}
         for a in session.query(AuditLog)
     ]
+    # Not derivable from the NAS: these are the Azure display names that let
+    # every preserved `who`/`author`/`confirmed_by` email above be shown as a
+    # person. Lose them and the whole audit trail reverts to mail aliases
+    # until each employee happens to sign in again.
+    # The permissions roster is human-entered and unrecoverable from the NAS:
+    # losing it in a rebuild would drop every buyer back to read-only and, for
+    # the item overrides, forget which owner each unowned part was assigned to.
+    user_access = [
+        {"email": u.email, "role": u.role, "note": u.note,
+         "granted_by": u.granted_by, "created_at": u.created_at,
+         "updated_at": u.updated_at}
+        for u in session.query(UserAccess)
+    ]
+    user_scopes = [
+        {"email": u.email, "scope_key": u.scope_key, "granted_by": u.granted_by,
+         "created_at": u.created_at}
+        for u in session.query(UserScope)
+    ]
+    # Keyed by canonical_name precisely so it survives the item-id churn a
+    # rebuild causes.
+    item_scope_overrides = [
+        {"canonical_name": o.canonical_name, "scope_key": o.scope_key,
+         "assigned_by": o.assigned_by, "created_at": o.created_at}
+        for o in session.query(ItemScopeOverride)
+    ]
+    user_profiles = [
+        {"email": u.email, "oid": u.oid, "display_name": u.display_name,
+         "given_name": u.given_name, "surname": u.surname,
+         "job_title": u.job_title, "department": u.department,
+         "office_location": u.office_location, "source": u.source,
+         "updated_at": u.updated_at, "last_seen_at": u.last_seen_at}
+        for u in session.query(UserProfile)
+    ]
     actuals = [
         {"item_id": a.item_id, "month": a.month, "qty": a.qty, "source": a.source}
         for a in session.query(Actual)
@@ -337,7 +371,10 @@ def _snapshot(session) -> dict:
             "compat_rules": compat_rules, "audit_log": audit_log, "actuals": actuals,
             "weekly_actuals": weekly_actuals, "eol_flags": eol_flags,
             "discontinuation_suggestions": discontinuation_suggestions,
-            "order_actions": order_actions, "stock_states": stock_states}
+            "order_actions": order_actions, "stock_states": stock_states,
+            "user_profiles": user_profiles, "user_access": user_access,
+            "user_scopes": user_scopes,
+            "item_scope_overrides": item_scope_overrides}
 
 
 def _restore(session, snap: dict) -> dict:
@@ -447,6 +484,21 @@ def _restore(session, snap: dict) -> dict:
     for a in snap["audit_log"]:
         session.add(AuditLog(who=a["who"], what=a["what"], before=a["before"],
                              after=a["after"], at=a["at"]))
+
+    # UserProfile likewise has no item FK. `.get()` rather than `[...]` so a
+    # snapshot taken by an older build (before this table existed) still
+    # restores instead of raising KeyError halfway through.
+    for u in snap.get("user_profiles", []):
+        session.add(UserProfile(**u))
+
+    # Same `.get()` reasoning: a snapshot taken before these tables existed
+    # must still restore rather than raise halfway through.
+    for u in snap.get("user_access", []):
+        session.add(UserAccess(**u))
+    for u in snap.get("user_scopes", []):
+        session.add(UserScope(**u))
+    for o in snap.get("item_scope_overrides", []):
+        session.add(ItemScopeOverride(**o))
 
     # Actual: build.run() already re-inserted fresh SAP-shipment rows for
     # this run's rolling window before we get here — see module docstring
@@ -626,6 +678,10 @@ def run() -> dict:
         "discontinuation_suggestions": len(snap["discontinuation_suggestions"]),
         "order_actions": len(snap["order_actions"]),
         "stock_states": len(snap["stock_states"]),
+        "user_profiles": len(snap["user_profiles"]),
+        "user_access": len(snap["user_access"]),
+        "user_scopes": len(snap["user_scopes"]),
+        "item_scope_overrides": len(snap["item_scope_overrides"]),
         "dropped": dropped, "superseded": superseded,
     }
     return build_report

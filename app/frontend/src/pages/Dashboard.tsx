@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
+import AuthorName from "../components/AuthorName";
 import type { BacktestReport, MismatchGroup, MismatchReport, Notification } from "../api/types";
 
 export default function Dashboard() {
@@ -247,7 +248,7 @@ export default function Dashboard() {
                 <div className="when mono">
                   {new Date(a.at).toLocaleString(ja ? "ja-JP" : "en-US")}
                   {" · "}
-                  {a.who ?? "system"}
+                  <AuthorName author={a.who} />
                 </div>
                 <div className="what">{a.what}</div>
               </li>

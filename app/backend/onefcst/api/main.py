@@ -20,24 +20,43 @@ from sqlalchemy.orm import Session
 from .. import config
 from .. import scheduler as scheduler_mod
 from ..config import CORS_ORIGINS
+from .. import db as db_mod
 from ..db import get_session
-from ..models import Item, Suggestion
+from ..models import AuditLog, Forecast, Item, Suggestion
 from ..timeutil import utc_now
 from ..advisory import rules as rules_svc
 from ..advisory import adjustments as adj_svc
 from ..advisory import notifications as notif_svc
 from ..advisory import discontinuation_review as discontinuation_svc
 from ..advisory import order_actions as order_svc
+from ..advisory import profiles as profiles_svc
 from .auth import effective_author, require_identity
+from . import permissions as perms
 from .rate_limit import RateLimitMiddleware
 from .schemas import (CompatRuleOut, ConfirmRequest, RejectRequest,
                       EditRuleRequest, AdjustmentIn, AdjustmentOut,
                       NotificationOut, DiscontinuationSuggestionOut,
-                      OrderActionOut, MarkOrderedRequest, ExtendDateRequest)
+                      OrderActionOut, MarkOrderedRequest, ExtendDateRequest,
+                      GraphProfileIn, AccessGrantIn, ItemScopeIn)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Create any table this build knows about but the database does not.
+    # `create_all` is additive and idempotent — it never alters or drops an
+    # existing table — so this is safe to run on every boot, and it is what
+    # lets a NEW table (user_profiles) appear on a deployment without forcing
+    # a 4-minute drop-and-rebuild. Until this existed, init_db() ran only from
+    # build.run(), so a schema addition was invisible until the next rebuild
+    # and every query against it failed with "no such table".
+    try:
+        db_mod.init_db()
+    except Exception as exc:                                   # noqa: BLE001
+        # Never block startup on it: /health and /maintenance must answer even
+        # when the database is unreachable — that is exactly when someone is
+        # trying to find out what is wrong.
+        print(f"[startup] init_db skipped: {exc}")
+
     task = scheduler_mod.start()
     yield
     if task:
@@ -108,8 +127,11 @@ async def _run_rebuild_in_background(entry: dict) -> None:
 
 
 @app.post("/build/rebuild")
-async def trigger_rebuild():
+async def trigger_rebuild(request: Request, session: Session = Depends(db)):
     import asyncio
+    # A rebuild drops every table and takes ~4 minutes. Audit finding F2: this
+    # was reachable by anyone who could load the page.
+    perms.require_admin(session, getattr(request.state, "identity", None))
     if rebuild_status_mod.is_running():
         raise HTTPException(status_code=409, detail="A rebuild is already running")
     entry = rebuild_status_mod.start("manual")
@@ -140,7 +162,7 @@ def auth_config():
 
 
 @app.get("/me")
-def whoami(request: Request):
+def whoami(request: Request, session: Session = Depends(db)):
     """The identity this server sees for the current request.
 
     The frontend shows this as the signed-in employee, and it is the first
@@ -151,6 +173,20 @@ def whoami(request: Request):
     ident = getattr(request.state, "identity", None)
     if ident is None:
         return {"authenticated": False, "source": "api-key" if config.API_KEY else "open"}
+
+    # Record/refresh this person so their NAME can be shown against their past
+    # changes — here rather than in the auth dependency on purpose: /me is
+    # called about once per page load, whereas the dependency runs on every
+    # request and would turn a read-only page into a stream of writes.
+    profile = {}
+    try:
+        profile = profiles_svc.as_dict(profiles_svc.touch(session, ident))
+    except Exception as exc:                                   # noqa: BLE001
+        # Never let profile bookkeeping break sign-in: /me is what an operator
+        # checks when auth is misbehaving, so it has to answer even if this
+        # table is mid-rebuild or missing entirely.
+        print(f"[profiles] touch failed for {ident.audit_author}: {exc}")
+
     return {
         "authenticated": True,
         "source": "entra",
@@ -160,7 +196,179 @@ def whoami(request: Request):
         "groups": list(ident.groups),
         "roles": list(ident.roles),
         "audit_author": ident.audit_author,
+        "profile": profile,
+        # Advisory only — the UI uses it to hide what you cannot use. Every
+        # field is re-checked server-side on the actual write.
+        "permissions": perms.describe(session, ident),
     }
+
+
+@app.put("/me/profile")
+def update_my_profile(request: Request, body: GraphProfileIn,
+                      session: Session = Depends(db)):
+    """Store the Microsoft Graph details the browser fetched for ITSELF.
+
+    This backend cannot ask Graph directly — it holds no credential of its own
+    (public client, no secret). The SPA already has a delegated `User.Read`
+    token, so it forwards the record here and everyone else's UI can then
+    resolve that email to a name.
+
+    Requires a real token: with only the shared API key there is no verified
+    identity to attach the details to, and guessing would be worse than
+    refusing.
+    """
+    ident = getattr(request.state, "identity", None)
+    if ident is None:
+        raise HTTPException(status_code=401,
+                            detail="Sign-in required to update your profile")
+    row = profiles_svc.apply_graph(session, ident, body.model_dump())
+    if row is None:
+        raise HTTPException(status_code=400,
+                            detail="Your account has no email claim to key a profile on")
+    return profiles_svc.as_dict(row)
+
+
+# ---------------------------------------------------------------- access ---
+# Managing the roster is itself an admin-only act: an endpoint that grants
+# roles and is reachable by anyone with a role is not an access-control system.
+
+@app.get("/access")
+def list_access(request: Request, session: Session = Depends(db)):
+    """The whole roster — who has which role, and which parts they own."""
+    perms.require_admin(session, getattr(request.state, "identity", None))
+    from ..models import UserAccess, UserScope
+    scopes: dict[str, list[str]] = {}
+    for s_ in session.query(UserScope).all():
+        scopes.setdefault(s_.email, []).append(s_.scope_key)
+    rows = []
+    for u in session.query(UserAccess).order_by(UserAccess.email).all():
+        rows.append({"email": u.email, "role": u.role, "note": u.note,
+                     "granted_by": u.granted_by,
+                     "scopes": sorted(scopes.get(u.email, []))})
+    return {"users": rows,
+            "roles": list(perms.ROLES),
+            # The 17 sub-file keys, so the admin screen offers real choices
+            # rather than a free-text box that silently accepts a typo.
+            "scope_keys": _scope_keys(),
+            "bootstrap_admins": list(config.BOOTSTRAP_ADMINS)}
+
+
+def _scope_keys() -> list[str]:
+    from ..ingestion.subfile_config import FILES
+    return list(FILES.keys())
+
+
+@app.put("/access")
+def grant_access(request: Request, body: AccessGrantIn,
+                 session: Session = Depends(db)):
+    """Create or update one person's role and owned sub-files."""
+    ident = getattr(request.state, "identity", None)
+    perms.require_admin(session, ident)
+
+    if body.role not in perms.ROLES:
+        raise HTTPException(400, f"role must be one of {list(perms.ROLES)}")
+    bad = [s_ for s_ in body.scopes if s_ not in _scope_keys()]
+    if bad:
+        # A typo'd scope key would silently own nothing, which looks identical
+        # to a permissions bug when the buyer is refused.
+        raise HTTPException(400, f"unknown sub-file(s): {bad}")
+
+    from ..models import UserAccess, UserScope
+    email = body.email.strip().lower()
+    if not email:
+        raise HTTPException(400, "email is required")
+    by = ident.audit_author if ident is not None else "unknown"
+
+    row = session.query(UserAccess).filter(UserAccess.email == email).first()
+    if row is None:
+        row = UserAccess(email=email, granted_by=by)
+        session.add(row)
+    row.role, row.note, row.updated_at = body.role, body.note, utc_now()
+
+    # Replace rather than merge: the admin screen sends the complete list, so
+    # merging would make removing a sub-file impossible.
+    session.query(UserScope).filter(UserScope.email == email).delete()
+    for key in dict.fromkeys(body.scopes):
+        session.add(UserScope(email=email, scope_key=key, granted_by=by))
+
+    session.add(AuditLog(who=by, what=f"access granted: {email} -> {body.role}"
+                         + (f" scopes={sorted(set(body.scopes))}" if body.scopes else "")))
+    session.commit()
+    return {"email": email, "role": body.role, "scopes": sorted(set(body.scopes))}
+
+
+@app.delete("/access/{email}")
+def revoke_access(request: Request, email: str, session: Session = Depends(db)):
+    ident = getattr(request.state, "identity", None)
+    perms.require_admin(session, ident)
+    from ..models import UserAccess, UserScope
+    email = email.strip().lower()
+    n = session.query(UserAccess).filter(UserAccess.email == email).delete()
+    session.query(UserScope).filter(UserScope.email == email).delete()
+    by = ident.audit_author if ident is not None else "unknown"
+    session.add(AuditLog(who=by, what=f"access revoked: {email}"))
+    session.commit()
+    # Revoking leaves the person able to READ — that is the intended floor,
+    # not an oversight. Removing sign-in entirely is an Entra assignment.
+    return {"revoked": bool(n), "email": email}
+
+
+@app.get("/access/unowned-items")
+def unowned_items(request: Request, limit: int = 500,
+                  session: Session = Depends(db)):
+    """Forecastable parts that belong to no sub-file, so only an admin can
+    currently change them.
+
+    These are NOT discontinued items — they are mostly Tier-2 parts the
+    attach-rate engine derives, plus items compiled straight into ONE計画's
+    master sheet. Listing them is how the roster gets finished.
+    """
+    perms.require_admin(session, getattr(request.state, "identity", None))
+    limit = max(1, min(limit, 2000))
+    out = []
+    seen = {f.item_id for f in session.query(Forecast.item_id).distinct()}
+    for item in session.query(Item).filter(Item.id.in_(seen)).all():
+        if perms.scope_of_item(session, item) is None:
+            out.append({"id": item.id, "canonical_name": item.canonical_name,
+                        "category": item.category, "tier": item.tier})
+            if len(out) >= limit:
+                break
+    return {"items": out, "scope_keys": _scope_keys()}
+
+
+@app.put("/access/item-scope")
+def set_item_scope(request: Request, body: ItemScopeIn,
+                   session: Session = Depends(db)):
+    """Hand-assign an unowned part to a sub-file owner group."""
+    ident = getattr(request.state, "identity", None)
+    perms.require_admin(session, ident)
+    if body.scope_key not in _scope_keys():
+        raise HTTPException(400, f"unknown sub-file: {body.scope_key}")
+
+    from ..models import ItemScopeOverride
+    name = body.canonical_name.strip()
+    row = session.query(ItemScopeOverride).filter(
+        ItemScopeOverride.canonical_name == name).first()
+    by = ident.audit_author if ident is not None else "unknown"
+    if row is None:
+        row = ItemScopeOverride(canonical_name=name, assigned_by=by)
+        session.add(row)
+    row.scope_key = body.scope_key
+    session.add(AuditLog(who=by, what=f"item scope set: {name} -> {body.scope_key}"))
+    session.commit()
+    return {"canonical_name": name, "scope_key": body.scope_key}
+
+
+@app.get("/users/directory")
+def users_directory(session: Session = Depends(db)):
+    """email → display name for everyone who has signed in.
+
+    Lets any view that shows an `author`/`who`/`confirmed_by` string render the
+    person's Azure name instead of a mail alias, and — because each row is
+    refreshed at that person's next sign-in — a rename in Azure propagates to
+    every historical record without touching the stored keys.
+    """
+    return {"users": profiles_svc.directory(session)}
 
 
 @app.get("/maintenance")
@@ -172,7 +380,7 @@ def get_maintenance():
 
 
 @app.post("/maintenance")
-def set_maintenance(request: Request, body: dict):
+def set_maintenance(request: Request, body: dict, session: Session = Depends(db)):
     """Toggle the site-wide notice. Requires the API key like every other
     write. Takes effect on every client within one poll (~20s), no restart.
 
@@ -181,6 +389,8 @@ def set_maintenance(request: Request, body: dict):
     2026-07-30), so the record of WHICH person is the whole point of the field
     — it defaulted to the literal "portal" before.
     """
+    # Taking the site away from everyone is an admin act, not a per-item one.
+    perms.require_admin(session, getattr(request.state, "identity", None))
     from .. import maintenance
     state = maintenance.set_state(
         bool(body.get("enabled")),
@@ -318,6 +528,9 @@ def mark_ordered(request: Request, item_id: int, body: MarkOrderedRequest, sessi
     item = session.get(Item, item_id)
     if item is None:
         raise HTTPException(404, f"item {item_id} not found")
+    # Recording an order against a colleague's part is the same class of act as
+    # adjusting its forecast, so it carries the same scope rule.
+    perms.require_item_write(session, getattr(request.state, "identity", None), item)
     try:
         oa = order_svc.mark_ordered(session, item, qty_ordered=body.qty_ordered,
                                     expected_arrival_date=body.expected_arrival_date,
@@ -367,6 +580,9 @@ def dismiss_order_action(request: Request, order_action_id: int, body: RejectReq
 @app.post("/compat-rules/bulk-confirm")
 def bulk_confirm(request: Request, author: str = "", threshold: float = 0.9,
                  session: Session = Depends(db)):
+    # One click confirms every draft rule above the threshold — the widest
+    # single write in the system, and not something to leave open to all.
+    perms.require_admin(session, getattr(request.state, "identity", None))
     # `author` stays in the signature (a query param here, not a body field) so
     # scripted callers without a token keep working, but a verified identity
     # overrides it — this endpoint confirms rules in bulk and is the last place
@@ -388,6 +604,10 @@ def draft_llm_compat_rules(session: Session = Depends(db)):
 # ------------------------------------------------------------ adjustments --
 @app.post("/adjustments", response_model=AdjustmentOut)
 def create_adjustment(request: Request, body: AdjustmentIn, session: Session = Depends(db)):
+    # Checked BEFORE recording: an adjustment the caller may not make must
+    # leave no trace at all, not a row plus a rollback.
+    perms.require_item_write(session, getattr(request.state, "identity", None),
+                             session.get(Item, body.item_id))
     try:
         a = adj_svc.record_adjustment(session, item_id=body.item_id, month=body.month,
                                       old_value=body.old_value, new_value=body.new_value,
@@ -445,9 +665,14 @@ def get_item(item_id: int, session: Session = Depends(db)):
 
 # ------------------------------------------------------------- forecasts ---
 @app.post("/forecasts/run")
-def run_forecast(horizon: int = 6, session: Session = Depends(db)):
+def run_forecast(request: Request, horizon: int = 6, session: Session = Depends(db)):
     """Generate a new forecast run (writes only to the app DB). Every run
-    validates itself out-of-sample and stores the accuracy with the run."""
+    validates itself out-of-sample and stores the accuracy with the run.
+
+    Admin-only: it replaces the numbers every other user is currently reading
+    and acting on, so it is not something to trigger from a shared PC by
+    accident."""
+    perms.require_admin(session, getattr(request.state, "identity", None))
     from ..forecasting import generate
     return generate(session, horizon=horizon)
 

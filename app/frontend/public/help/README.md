@@ -56,3 +56,64 @@ HTTP, so anyone who opens the browser's developer tools can save it. If the
 content genuinely must not leave the portal, that needs a different approach
 (authenticated streaming endpoint with signed, expiring URLs) — ask before
 assuming the current setup provides it.
+
+---
+
+## Re-recording the walkthrough (`tools/record_demo.py`)
+
+The current `demo-ja.webm` / `demo-en.webm` are **generated**, not hand-made.
+One command re-records either language end to end, so the video stays current
+instead of going stale the first time a screen changes:
+
+```bash
+python3 tools/record_demo.py --lang ja      # or: en / both
+python3 tools/record_demo.py --lang ja --headed   # watch it, when a selector breaks
+```
+
+It drives the real app in Chromium via Playwright and adds two things the app
+does not have: a **visible cursor** (Playwright's synthetic input moves no
+on-screen pointer, so a plain capture looks like the UI operating itself) and
+**burnt-in bilingual captions** (narration would need a voice track; captions
+also work on a muted office PC).
+
+### It needs its own servers
+
+The normal dev stack has SSO on, so every API call needs a real Microsoft token
+and a headless browser cannot get one. Start an SSO-off pair first, pointed at
+a **copy** of the database — a recording that types into forms must never be
+able to leave an adjustment or an audit-log entry in the real one:
+
+```bash
+cp app/data/onefcst.db /tmp/demo-copy.db
+
+# backend on 8654, no SSO, no API key, copy of the DB
+cd app/backend && DATABASE_URL="sqlite:////tmp/demo-copy.db" \
+  ONEFCST_API_KEY="" ONEFCST_ENTRA_TENANT_ID="" ONEFCST_ENTRA_CLIENT_ID="" \
+  ONEFCST_CORS_ORIGINS="http://127.0.0.1:5200" \
+  python3 -m uvicorn onefcst.api.main:app --host 127.0.0.1 --port 8654
+
+# frontend on 5200, pointed at it
+cd app/frontend && VITE_ENTRA_TENANT_ID="" VITE_ENTRA_CLIENT_ID="" \
+  VITE_API_BASE="http://127.0.0.1:8654" npx vite --host 127.0.0.1 --port 5200
+```
+
+### The sign-in scene
+
+The Microsoft credential screen is **not filmed**. The scene shows our own
+screens and captions what happens at Microsoft. Filming a mocked-up Microsoft
+page would teach the team to trust a login screen we drew ourselves, which is
+exactly the habit phishing relies on. If a real sign-in must be shown, record
+those few seconds by hand and keep them clearly separate.
+
+### Checking a run without watching it
+
+Each run writes a frame per scene to `/tmp/onefcst-demo-record/shots/`. The
+failure that actually happens is a scene filming a half-loaded page, and the
+frames show it in seconds. `nav()` waits for network idle for this reason —
+the first take filmed the forecast screen with every tile still a dash.
+
+### Length
+
+The brief is three minutes. `SPEED` at the top scales every hold at once, and
+the script prints its real elapsed time and warns past 190s. Adjust `SPEED`
+rather than deleting a scene — the point is to cover the whole workflow.

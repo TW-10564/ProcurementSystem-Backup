@@ -241,6 +241,128 @@ class AuditLog(Base):
     at = Column(DateTime, default=datetime.utcnow)
 
 
+class UserAccess(Base):
+    """What a signed-in employee is allowed to do (the RBAC roster).
+
+    Three roles, matching how the work is actually divided:
+
+      * ``admin``      — the system owner. Rebuild from the NAS, re-run
+                         forecasts, maintenance mode, and adjustments on ANY
+                         item. Everything is still written to the audit log.
+      * ``purchasing`` — the 7–10 購買本部 buyers. May adjust only the parts in
+                         their own scope (see UserScope) — normally the 1–3 ONE
+                         sub-files they personally maintain.
+      * ``planning``   — 企画部. May tune only the four Tier-1 categories they
+                         actually plan (CPU / VGA / MB / Case), across the board
+                         rather than per sub-file.
+
+    Anyone signed in but absent from this table can READ everything and write
+    nothing. Read stays global on purpose: scoping writes prevents mistakes,
+    while scoping reads would just create information silos — and the whole
+    point of the audit log is that everyone can see what everyone changed.
+
+    Why here and not in Entra: the three ROLES could live in Entra as app
+    roles, and may later. Per-person part ownership cannot — it would need one
+    app role per sub-file and an IT ticket every time two buyers swap files.
+    Keeping the roster here means the admin manages it in the portal, in the
+    same place they see who has been signing in.
+    """
+    __tablename__ = "user_access"
+    id = Column(Integer, primary_key=True)
+    email = Column(String, nullable=False, unique=True, index=True)
+    role = Column(String, nullable=False)        # admin | purchasing | planning
+    note = Column(Text)                          # e.g. "MEM/SSD担当"
+    granted_by = Column(String)                  # email of the admin who set it
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class UserScope(Base):
+    """Which parts a purchasing member owns — one row per (person, sub-file).
+
+    `scope_key` is the ONE sub-file's short name as it appears in
+    ingestion/subfile_config.py: CPU, MB, VGA, RTX, MEM, SSD, HDD, PSU, Case,
+    Case_other, Case_梱包, FAN, ODD, NotePC, OS, Mouse&KB, 国内一般品.
+
+    Ignored for admin (everything) and planning (the Tier-1 categories, which
+    are a property of the item, not an ownership assignment).
+    """
+    __tablename__ = "user_scopes"
+    id = Column(Integer, primary_key=True)
+    email = Column(String, nullable=False, index=True)
+    scope_key = Column(String, nullable=False)
+    granted_by = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("email", "scope_key"),)
+
+
+class ItemScopeOverride(Base):
+    """Hand-assigned owner for an item the sub-file lineage cannot place.
+
+    About a third of forecastable items belong to no sub-file: Tier-2 parts the
+    attach-rate engine derives (サプライ用品, ベアボーンキット, マウス…) and
+    items the manager compiles straight into ONE計画.xlsm's master sheet. They
+    are live items, not discontinued — they simply have no sub-file owner, so
+    without this table nobody but an admin could ever adjust them.
+
+    Keyed by ``canonical_name``, NOT item_id: build.py drops and recreates
+    every Item row, so an id-keyed override would silently repoint at a
+    different part after a rebuild — the same failure mode
+    rebuild_preserving.py already documents for adjustments. The name is the
+    stable identifier across rebuilds.
+    """
+    __tablename__ = "item_scope_overrides"
+    id = Column(Integer, primary_key=True)
+    canonical_name = Column(String, nullable=False, unique=True, index=True)
+    scope_key = Column(String, nullable=False)
+    assigned_by = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class UserProfile(Base):
+    """Who an email address belongs to, as Entra/Graph currently describes them.
+
+    Every human record in this database — adjustments, confirmed compat rules,
+    order actions, the audit log — is keyed by EMAIL, deliberately: a display
+    name is neither unique nor stable, so it must never be the identifier
+    (see Identity.audit_author). But an email is not what a buyer wants to read
+    in a list of who changed what, and 綽名-style mail aliases like
+    `m_balamurukan@` do not tell you who that is at a glance.
+
+    So this table is a cache, not a source of truth: email → the person's
+    current Azure details, refreshed from the verified token (and from Graph,
+    when the SPA forwards it) each time they sign in. Two consequences that are
+    the whole point:
+
+      * Renaming someone in Azure updates every historical record's DISPLAYED
+        name at their next sign-in, while the stored email keys never move.
+      * Nothing here is trusted for authorization. It is display metadata,
+        written only for the caller's OWN verified identity, so one user can
+        never edit how another user is shown.
+
+    Rebuilds must preserve this table like any other human data
+    (rebuild_preserving.py) — it is not derivable from the NAS sources.
+    """
+    __tablename__ = "user_profiles"
+    id = Column(Integer, primary_key=True)
+    # Lowercased, and the join key back to every `author`/`who`/`confirmed_by`
+    # string in this schema.
+    email = Column(String, nullable=False, unique=True, index=True)
+    oid = Column(String, index=True)     # Entra object id: stable across renames
+    display_name = Column(String)
+    given_name = Column(String)
+    surname = Column(String)
+    job_title = Column(String)
+    department = Column(String)
+    office_location = Column(String)
+    # Where the details came from: "token" (ID-token claims only) or "graph"
+    # (the SPA forwarded Microsoft Graph's richer record). Graph must not be
+    # silently overwritten by the thinner token data — see api/main.py.
+    source = Column(String, default="token")
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, default=datetime.utcnow)
+
+
 class PlannerSnapshot(Base):
     """Archived copy of the planner's OWN future-month forecast, captured at
     a point in time, so it can be graded later against the real result.

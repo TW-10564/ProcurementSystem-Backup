@@ -41,6 +41,25 @@ export const loginRequest = {
   scopes: apiScope ? [apiScope] : ["openid", "profile", "email"],
 };
 
+/**
+ * What we ask consent for at the sign-in prompt, as opposed to what we request
+ * per-token afterwards.
+ *
+ * `User.Read` is added so the consent screen collects it ONCE, at the only
+ * moment the user is already being interrupted — otherwise the first attempt
+ * to read their job title from Graph fails with InteractionRequiredAuthError
+ * and the profile page shows half a person.
+ *
+ * Not merged into `loginRequest`: an access-token request may only name scopes
+ * for ONE resource, so pairing our own API scope with a Graph scope makes
+ * `acquireTokenSilent` throw. Consent may span resources; a token may not.
+ */
+export const loginScopes = {
+  scopes: apiScope
+    ? [apiScope, "User.Read"]
+    : ["openid", "profile", "email", "User.Read"],
+};
+
 const configuration: Configuration = {
   auth: {
     clientId,
@@ -102,10 +121,15 @@ export async function acquireApiToken(): Promise<string | null> {
 
   try {
     const result = await msalInstance.acquireTokenSilent({ ...loginRequest, account });
-    // With a custom API scope we get an access token; with the default scopes
-    // the ID token is the credential the backend validates. Falling back
-    // rather than picking one keeps both Entra configurations working.
-    return result.accessToken || result.idToken || null;
+    // Which credential to send depends on what we asked for, and the choice
+    // must NOT be a `||` fallback — with the default scopes MSAL *does* return
+    // a non-empty accessToken, but it is a token for MICROSOFT GRAPH. Graph
+    // access tokens carry a nonce in the header that makes their signature
+    // unverifiable by anyone except Graph, so our backend rejects every call
+    // with "Signature verification failed" while sign-in itself looks fine.
+    //   * custom API scope set  → accessToken, minted for our own API.
+    //   * no custom scope       → idToken, whose `aud` is our client id.
+    return apiScope ? result.accessToken || null : result.idToken || null;
   } catch {
     // Silent renewal fails when the refresh token has expired or consent was
     // revoked. A full-page redirect is the only way back, and it is safe here
@@ -115,10 +139,37 @@ export async function acquireApiToken(): Promise<string | null> {
   }
 }
 
+/**
+ * Log out of THIS APP only, with no trip to Microsoft.
+ *
+ * `clearCache()` is the whole mechanism: it drops MSAL's own tokens without
+ * navigating to Entra's logout endpoint, so the user goes straight to the
+ * landing page instead of flashing through login.microsoftonline.com.
+ * (`logoutRedirect({onRedirectNavigate: () => false})` did this in MSAL 3–4;
+ * v5 removed that field from EndSessionRequest, and clearCache is the
+ * supported replacement.)
+ *
+ * KNOWN TRADE-OFF, chosen deliberately (2026-07-31) for the faster exit:
+ * the Entra SESSION COOKIE SURVIVES. Pressing "enter the portal" afterwards
+ * signs the previous user back in silently, with no prompt — so on a shared
+ * office PC the next person can end up working, and having their adjustments
+ * logged, under someone else's name. Two ways to tighten it later if that
+ * bites: add `prompt: "select_account"` to `loginScopes` so the next sign-in
+ * always asks who you are, or restore the full `logoutRedirect` (drop the
+ * `onRedirectNavigate` line) to end the Microsoft session as well.
+ *
+ * Mitigation already in place: MSAL caches in sessionStorage, so closing the
+ * browser really does end it — this gap only spans "logged out but same tab
+ * still open".
+ */
 export async function signOut(): Promise<void> {
   if (!msalInstance) return;
   const account = activeAccount();
-  // logoutRedirect also ends the Entra session, so the next visit really does
-  // ask who you are instead of silently signing the same person back in.
-  await msalInstance.logoutRedirect({ account: account ?? undefined });
+  await msalInstance.clearCache({ account: account ?? undefined });
+  msalInstance.setActiveAccount(null);
+  // A full page load, not a router navigate: it drops every piece of in-memory
+  // state (IdentityContext's /me, the directory, cached page data) so nothing
+  // of the previous user is left on screen.
+  window.location.assign("/");
 }
+

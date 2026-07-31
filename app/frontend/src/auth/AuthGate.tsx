@@ -7,6 +7,12 @@
  * earlier oauth2-proxy attempt look broken (it answered 403 with its own
  * button page).
  *
+ * Wraps only the /app subtree, never the public landing page at "/". That
+ * distinction is what makes signing out work: Entra returns the browser to
+ * our origin, and if the gate covered "/" it would immediately bounce the
+ * signed-out user back to Microsoft — so "log out" appeared to dump them on
+ * an account picker rather than logging them out.
+ *
  * When VITE_ENTRA_* is unset this component is a pass-through, so local dev
  * and the pre-SSO deployment are untouched.
  */
@@ -14,7 +20,7 @@ import { MsalProvider, MsalAuthenticationTemplate } from "@azure/msal-react";
 import { InteractionType } from "@azure/msal-browser";
 import type { MsalAuthenticationResult } from "@azure/msal-react";
 import type { ReactNode } from "react";
-import { loginRequest, msalInstance, ssoEnabled } from "./msal";
+import { loginScopes, msalInstance, ssoEnabled } from "./msal";
 
 const shell: React.CSSProperties = {
   display: "flex",
@@ -98,7 +104,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     <MsalProvider instance={msalInstance}>
       <MsalAuthenticationTemplate
         interactionType={InteractionType.Redirect}
-        authenticationRequest={loginRequest}
+        authenticationRequest={loginScopes}
         loadingComponent={SigningIn}
         errorComponent={SignInFailed}
       >

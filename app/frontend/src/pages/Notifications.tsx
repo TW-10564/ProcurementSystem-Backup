@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useLang } from "../i18n/LanguageContext";
+import AuthorName from "../components/AuthorName";
 import type { Notification } from "../api/types";
 
 /* ---- event classification (keyword heuristic on `what`) ---- */
@@ -190,7 +191,7 @@ export default function Notifications() {
                     <div className="grow">
                       <div className="ttl">{n.what}</div>
                       <div className="meta">
-                        <span style={{ fontWeight: 600 }}>{n.who ?? "system"}</span>
+                        <span style={{ fontWeight: 600 }}><AuthorName author={n.who} /></span>
                         <span className="dim"> · {kindLabel[k]}</span>
                       </div>
                     </div>

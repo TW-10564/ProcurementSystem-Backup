@@ -16,8 +16,29 @@ export const translations = {
     ja: "現在パイロット運用中のため、サインインは無効化されています。",
     en: "Sign-in is disabled during this pilot deployment.",
   },
+  landing_enter_note_sso: {
+    ja: "Microsoft アカウント（社内アカウント）でサインインします。",
+    en: "You will be asked to sign in with your Microsoft work account.",
+  },
 
   logout: { ja: "ログアウト", en: "Log out" },
+
+  nav_profile: { ja: "プロフィール", en: "My Profile" },
+  profile_title: { ja: "プロフィール", en: "My Profile" },
+  profile_desc: {
+    ja: "Microsoft Entra ID（社内アカウント）に登録されている情報です。変更は情報システム部門にご依頼ください。",
+    en: "Your details as registered in Microsoft Entra ID. To change them, ask IT — this page is a read-only view of the company directory.",
+  },
+  profile_identity: { ja: "社員情報", en: "Employee details" },
+  profile_identity_desc: { ja: "Azure ADから取得", en: "Retrieved from Azure AD" },
+  profile_display_name: { ja: "表示名", en: "Display name" },
+  profile_given_name: { ja: "名", en: "Given name" },
+  profile_surname: { ja: "姓", en: "Surname" },
+  profile_email: { ja: "メールアドレス", en: "Email" },
+  profile_job_title: { ja: "役職", en: "Job title" },
+  profile_department: { ja: "部署", en: "Department" },
+  profile_office: { ja: "勤務地", en: "Office" },
+  profile_unknown: { ja: "（名前未取得）", en: "(name unavailable)" },
 
   nav_section_overview: { ja: "概要", en: "Overview" },
   nav_dashboard: { ja: "ダッシュボード", en: "Dashboard" },
@@ -82,7 +103,6 @@ export const translations = {
     ja: "計画担当者による調整が、実績と比較して予測を改善したかを測定します",
     en: "Measures whether a planner's adjustment made the forecast more accurate once the actual result is known",
   },
-  fva_download: { ja: "調整履歴をExcel出力", en: "Export adjustment history" },
   fva_no_scoreable: { ja: "評価可能な調整はまだありません。", en: "No adjustments are scoreable yet." },
   fva_recorded_note: {
     ja: "（現在記録されている調整: {n}件、対象月の実績確定待ち）",

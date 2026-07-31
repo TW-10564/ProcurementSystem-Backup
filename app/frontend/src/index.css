@@ -1476,3 +1476,162 @@ textarea {
 }
 .maint-strip.rebuild-strip .maint-link { color: inherit; }
 .maint-strip.rebuild-strip .maint-link:hover { color: #000; }
+
+/* ── signed-in user (header) + profile page ─────────────────────────────────
+   The header chip is a link to /app/profile: on a shared PC the first thing
+   someone needs when the name looks wrong is somewhere to check what will be
+   recorded against them. */
+.signed-in-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--ink);
+  border: 1px solid transparent;
+  max-width: 15rem;
+}
+
+.signed-in-user:hover {
+  background: var(--brand-bg-soft);
+  border-color: var(--line);
+}
+
+.signed-in-avatar,
+.profile-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-600);
+  color: #fff;
+  font-weight: 700;
+  border-radius: 50%;
+  flex: none;
+}
+
+.signed-in-avatar {
+  width: 26px;
+  height: 26px;
+  font-size: 0.72rem;
+}
+
+/* Two lines in the height of one: the name reads first, the department is
+   supporting detail. min-width:0 is what actually lets the ellipsis work
+   inside a flex row — without it the text refuses to shrink and pushes the
+   language toggle off the header on a narrow window. */
+.signed-in-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 0;
+}
+
+.signed-in-name {
+  font-size: 0.79rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signed-in-sub {
+  font-size: 0.68rem;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.profile-body {
+  padding: 8px 24px 18px;
+}
+
+.profile-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 0 18px;
+  border-bottom: 1px solid var(--line2);
+  margin-bottom: 6px;
+}
+
+.profile-avatar {
+  width: 46px;
+  height: 46px;
+  font-size: 1.15rem;
+}
+
+.profile-hero-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.profile-hero-sub {
+  font-size: 0.79rem;
+  color: var(--muted);
+}
+
+.profile-row {
+  display: grid;
+  grid-template-columns: 9.5rem 1fr;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line2);
+  font-size: 0.82rem;
+}
+
+.profile-row:last-child {
+  border-bottom: none;
+}
+
+.profile-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.profile-value {
+  word-break: break-word;
+}
+
+.profile-empty {
+  color: var(--faint);
+}
+
+
+
+
+/* An author rendered as a name, with the email kept in the tooltip: the name
+   is what a buyer reads, the email is the key actually stored. */
+.author-name {
+  cursor: help;
+  border-bottom: 1px dotted var(--line);
+}
+
+/* The author on the adjustment form: a fact about who you are, not an input.
+   Styled to read as a value rather than a disabled field — a greyed-out box
+   invites people to try to edit it and wonder why they can't. */
+.author-fixed {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.author-fixed-name {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.author-fixed-sub {
+  font-size: 0.72rem;
+  color: var(--faint);
+}

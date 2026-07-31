@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../i18n/LanguageContext";
+import { ssoEnabled } from "../auth/msal";
 
 export default function Landing() {
   const { lang, setLang, t } = useLang();
@@ -31,7 +32,9 @@ export default function Landing() {
           <button className="landing-enter-btn" onClick={() => navigate("/app")}>
             {t("landing_enter_button")}
           </button>
-          <div className="landing-enter-note">{t("landing_enter_note")}</div>
+          <div className="landing-enter-note">
+            {t(ssoEnabled ? "landing_enter_note_sso" : "landing_enter_note")}
+          </div>
         </div>
       </div>
 

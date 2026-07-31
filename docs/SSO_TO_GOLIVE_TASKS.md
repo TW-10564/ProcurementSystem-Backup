@@ -9,10 +9,11 @@ What you are waiting for:
 |---|---|
 | `ENTRA_TENANT_ID` | ✅ received 2026-07-30 → `/srv/onefcst/.env` |
 | `ENTRA_CLIENT_ID` | ✅ received 2026-07-30 → `/srv/onefcst/.env` |
-| `ENTRA_CLIENT_SECRET` | **not requested yet, on purpose** — ask for it the day phase 3 starts. Entra secrets expire from their creation date, so an early one just burns clock. Required then: oauth2-proxy is a confidential client and cannot do the token exchange without it. |
-| Redirect URI registered as `https://one-forecast.twave.co.jp/oauth2/callback` | Entra app registration (their side) |
-| Group/role claim names for `Purchasing` / `Planning` / `Admin` | Phase 4 below |
-| DNS rename `one-forcast` → `one-forecast` | TLS cert + the redirect URI |
+| `ENTRA_CLIENT_SECRET` | ❌ **never needed** — the 2026-07-30 switch to MSAL made this a *public* client doing PKCE in the browser. Do not ask IT for a secret; there is nowhere to put one. |
+| Redirect URI `https://one-forecast.twave.co.jp` registered under the **Single-page application** platform | Entra app registration (their side). Bare origin, **no path** — the old `/oauth2/callback` belonged to oauth2-proxy and no longer exists. A *Web*-platform URI demands a secret at token exchange and fails with `AADSTS7000218`. |
+| **Assignment required = Yes** + the user/group assignment | Entra enterprise application (their side). This is what stops the rest of the tenant signing in — see 3.0. |
+| Group/role claim names for `Purchasing` / `Planning` / `Admin` | ❌ **not used.** Roles are held in this app's own `user_access` table (see phase 4), because per-person part ownership cannot be expressed as Entra app roles without one role per sub-file. IT controls *who may sign in*; the portal controls *what they may do*. |
+| DNS rename `one-forcast` → `one-forecast` | ✅ **done 2026-07-31.** Every file in `deploy/` already used the corrected spelling. |
 
 Estimates assume things work. The two that historically do not: the SMB mount
 (phase 1) and the redirect URI round-trip (phase 3).
@@ -118,8 +119,11 @@ easier to debug than doing both at once.
       not a hole: Entra has already filtered. Nothing in this repo needs to
       change for it, and it is worth doing on day one even though per-role
       permissions (phase 4) come later.
-- [ ] **3.1** Confirm the DNS rename landed and the cert matches the corrected
-      spelling. The Entra redirect URI must match **exactly**, including scheme.
+- [x] **3.1** ~~Confirm the DNS rename landed~~ — **done 2026-07-31**,
+      `one-forecast.twave.co.jp` now resolves. Still verify on the day that the
+      cert presented matches it and that the Entra redirect URI is character-
+      identical, **including scheme and with no trailing slash**: `AADSTS50011`
+      is what a mismatch looks like, and it names nothing useful.
 > **Architecture changed 2026-07-30: MSAL in the SPA, not oauth2-proxy.**
 > The app is a *public client* doing PKCE in the browser, so there is **no
 > client secret** — the reason for the switch. oauth2-proxy is a confidential

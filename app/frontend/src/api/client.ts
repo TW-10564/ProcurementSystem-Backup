@@ -1,16 +1,19 @@
 import axios from "axios";
 import { acquireApiToken } from "../auth/msal";
+import type { GraphProfile } from "../auth/graph";
 import type {
   Adjustment,
   BacktestReport,
   CompatRule,
   DiscontinuationReport,
+  DirectoryUser,
   DiscontinuationSuggestion,
   ForecastDetail,
   ForecastList,
   ForecastRunInfo,
   ForecastSummary,
   LlmDraftResult,
+  Me,
   MismatchReport,
   Notification,
   OrderActionInfo,
@@ -21,6 +24,7 @@ import type {
   RebuildStatus,
   SalesReconciliationReport,
   StockReconciliationReport,
+  UserProfile,
 } from "./types";
 
 // Read-only against every NAS source, by construction: this client only ever
@@ -95,6 +99,17 @@ export const api = {
   // DB is locked mid-rebuild or the shared key has rotated, since that is
   // exactly when users need to be told what is going on.
   maintenance: () => http.get<MaintenanceState>("/maintenance").then((r) => r.data),
+
+  /** Who the SERVER thinks is calling — the check when writes look misattributed. */
+  me: () => http.get<Me>("/me").then((r) => r.data),
+
+  /** Forward the Graph record so colleagues' UIs can resolve this email to a name. */
+  updateMyProfile: (profile: GraphProfile) =>
+    http.put<UserProfile>("/me/profile", profile).then((r) => r.data),
+
+  /** email → display name for everyone who has signed in. */
+  usersDirectory: () =>
+    http.get<{ users: DirectoryUser[] }>("/users/directory").then((r) => r.data.users),
 
   setMaintenance: (enabled: boolean, message: string) =>
     http.post<MaintenanceState>("/maintenance", { enabled, message }).then((r) => r.data),
