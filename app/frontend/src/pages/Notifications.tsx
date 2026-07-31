@@ -32,12 +32,61 @@ export default function Notifications() {
   const [author, setAuthor] = useState<string | null>(null);
   const [kind, setKind] = useState<Kind | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const PAGE = 50;
+
+  /* Refetch whenever a filter changes, from offset 0. The server does the
+     filtering AND the counting, so a narrowed view is complete rather than
+     "whatever matched inside the newest 200 rows". */
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api
+      .notifications({ limit: PAGE, offset: 0, who: author, kind, q: query || null })
+      .then((page) => {
+        if (cancelled) return;
+        const items = Array.isArray(page?.items) ? page.items : [];
+        setList(items);
+        setTotal(page?.total ?? items.length);
+        setHasMore(Boolean(page?.has_more));
+      })
+      .catch((e: unknown) => setError(String((e as Error).message ?? e)))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [author, kind, query]);
 
   useEffect(() => {
-    const onError = (e: unknown) => setError(String((e as Error).message ?? e));
-    api.notifications(200).then(setList).catch(onError);
-    api.notificationSummary().then(setSummary).catch(onError);
+    api
+      .notificationSummary()
+      .then(setSummary)
+      .catch((e: unknown) => setError(String((e as Error).message ?? e)));
   }, []);
+
+  const loadMore = () => {
+    setLoading(true);
+    api
+      .notifications({ limit: PAGE, offset: list.length, who: author, kind, q: query || null })
+      .then((page) => {
+        // Append, and de-duplicate by id: rows written in the same second
+        // share a timestamp, and although the server tie-breaks on id, a row
+        // inserted between two page fetches would otherwise appear twice.
+        const items = Array.isArray(page?.items) ? page.items : [];
+        setList((prev) => {
+          const seen = new Set(prev.map((n) => n.id));
+          return [...prev, ...items.filter((n) => !seen.has(n.id))];
+        });
+        setTotal(page?.total ?? 0);
+        setHasMore(Boolean(page?.has_more));
+      })
+      .catch((e: unknown) => setError(String((e as Error).message ?? e)))
+      .finally(() => setLoading(false));
+  };
 
   const ja = lang === "ja";
 
@@ -65,22 +114,19 @@ export default function Notifications() {
 
   /* ---- distinct authors for chip filter ---- */
   const authors = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const n of list) {
-      const w = n.who ?? "system";
-      m.set(w, (m.get(w) ?? 0) + 1);
-    }
+    // From the all-time summary rather than the loaded page: chips built from
+    // the page would change every time you filter or load more, and would
+    // omit anyone with no activity in the newest rows.
+    const m = new Map<string, number>(Object.entries(summary?.by_author ?? {}));
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
-  }, [list]);
+  }, [summary]);
 
-  /* ---- filter + group by day ---- */
+  /* ---- group by day ----
+     No filtering here any more: the server has already applied author, kind
+     and search. Re-filtering locally would silently drop rows the server
+     deliberately returned, and would disagree with the `total` shown above. */
   const groups = useMemo(() => {
-    const filtered = list.filter((n) => {
-      if (author && (n.who ?? "system") !== author) return false;
-      if (kind && classify(n.what) !== kind) return false;
-      return true;
-    });
-    const sorted = [...filtered].sort(
+    const sorted = [...(Array.isArray(list) ? list : [])].sort(
       (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()
     );
     const out: { key: string; label: string; items: Notification[] }[] = [];
@@ -93,7 +139,7 @@ export default function Notifications() {
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [list, author, kind, lang]);
+  }, [list, lang]);
 
   const kindLabel: Record<Kind, string> = {
     adjust: ja ? "調整" : "Adjustments",
@@ -103,6 +149,7 @@ export default function Notifications() {
   };
 
   const shown = groups.reduce((s, g) => s + g.items.length, 0);
+  void shown;   // header now reports the server-side total instead
 
   return (
     <div>
@@ -139,7 +186,13 @@ export default function Notifications() {
         <div className="hd">
           <h3>{t("notif_all_activity")}</h3>
           <span className="dim" style={{ fontSize: "0.78rem" }}>
-            {ja ? `${shown} 件` : `${shown} events`}
+            {list.length < total
+              ? ja
+                ? `${total.toLocaleString()}件中 ${list.length}件を表示`
+                : `showing ${list.length} of ${total.toLocaleString()}`
+              : ja
+                ? `${total.toLocaleString()} 件`
+                : `${total.toLocaleString()} events`}
           </span>
         </div>
 
@@ -154,9 +207,16 @@ export default function Notifications() {
               className={`chip${author === who ? " on" : ""}`}
               onClick={() => setAuthor(author === who ? null : who)}
             >
-              {who} <span className="dim">{n}</span>
+              <AuthorName author={who} /> <span className="dim">{n}</span>
             </button>
           ))}
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={ja ? "内容を検索…" : "Search…"}
+            aria-label={ja ? "内容を検索" : "Search events"}
+            style={{ minWidth: 180 }}
+          />
           <span style={{ flex: 1 }} />
           {(["adjust", "confirm", "warn", "system"] as Kind[]).map((k) => (
             <button
@@ -169,7 +229,7 @@ export default function Notifications() {
           ))}
         </div>
 
-        {groups.length === 0 ? (
+        {groups.length === 0 && !loading ? (
           <div className="empty">{t("notif_none")}</div>
         ) : (
           groups.map((g) => (
@@ -207,6 +267,21 @@ export default function Notifications() {
               })}
             </div>
           ))
+        )}
+
+        {/* Paging is a deliberate button, not infinite scroll: an audit list
+            people read to answer "who changed this" should not move under
+            them while they read. */}
+        {hasMore && (
+          <div style={{ padding: "14px 20px", textAlign: "center" }}>
+            <button className="btn" onClick={loadMore} disabled={loading}>
+              {loading
+                ? t("common_loading")
+                : ja
+                  ? `さらに表示（残り ${(total - list.length).toLocaleString()} 件）`
+                  : `Load more (${(total - list.length).toLocaleString()} remaining)`}
+            </button>
+          </div>
         )}
       </div>
     </div>

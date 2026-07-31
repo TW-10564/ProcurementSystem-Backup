@@ -20,14 +20,14 @@ export default function Dashboard() {
     Promise.all([
       api.mismatchReport(),
       api.backtestReport(),
-      api.notifications(6),
+      api.notifications({ limit: 6 }),
       api.compatRules({ status: "draft" }),
       api.compatRules({ status: "confirmed" }),
     ])
       .then(([m, b, n, draft, confirmed]) => {
         setMismatch(m);
         setBacktest(b);
-        setActivity(n);
+        setActivity(Array.isArray(n?.items) ? n.items : []);
         setRuleCounts({ draft: draft.length, confirmed: confirmed.length });
       })
       .catch((e) => setError(String(e.message ?? e)));

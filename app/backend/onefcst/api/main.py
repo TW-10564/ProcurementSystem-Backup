@@ -32,6 +32,7 @@ from ..advisory import order_actions as order_svc
 from ..advisory import profiles as profiles_svc
 from .auth import effective_author, require_identity
 from . import permissions as perms
+from .oauth import router as oauth_router
 from .rate_limit import RateLimitMiddleware
 from .schemas import (CompatRuleOut, ConfirmRequest, RejectRequest,
                       EditRuleRequest, AdjustmentIn, AdjustmentOut,
@@ -72,6 +73,10 @@ app = FastAPI(title="onefcst — Forecasting & Procurement Decision Support",
 # reverse of add order (last added = outermost), and CORS should stay
 # outermost so its headers still get attached even on a 429 response.
 app.add_middleware(RateLimitMiddleware)
+
+# Sign-in endpoints. Registered before the SPA catch-all so /auth/* is
+# handled by the API rather than served the index page.
+app.include_router(oauth_router)
 
 # CORS: the SPA (Vite dev server) runs on a different origin. Defaults to
 # localhost-only (see config.CORS_ORIGINS) — set ONEFCST_CORS_ORIGINS to the
@@ -154,6 +159,16 @@ def auth_config():
     """
     from . import entra
     cfg = entra.describe_config()
+    # With backend sign-in the browser never starts an OIDC redirect itself, so
+    # it has no use for the tenant/client ids — and the stated reason for
+    # moving the flow server-side was to keep them out of the frontend. Report
+    # only what the SPA actually needs: that sign-in is handled elsewhere.
+    if config.OAUTH_BFF_ENABLED:
+        return {"enabled": True, "backend_sign_in": True,
+                "api_key_required": bool(config.API_KEY),
+                "api_key_accepted": bool(config.API_KEY)
+                                    and config.ENTRA_ALLOW_API_KEY}
+    cfg["backend_sign_in"] = False
     # Only ever a boolean: whether a shared key exists, never the key.
     cfg["api_key_required"] = bool(config.API_KEY)
     cfg["api_key_accepted"] = bool(config.API_KEY) and (
@@ -631,9 +646,32 @@ def get_adjustments(item_id: int | None = None, session: Session = Depends(db)):
 
 
 # ------------------------------------------------------------ notifications-
-@app.get("/notifications", response_model=list[NotificationOut])
-def get_notifications(limit: int = 50, session: Session = Depends(db)):
-    return notif_svc.recent_activity(session, limit=limit)
+@app.get("/notifications")
+def get_notifications(limit: int = 50, offset: int = 0,
+                      who: str | None = None, kind: str | None = None,
+                      q: str | None = None,
+                      date_from: str | None = None, date_to: str | None = None,
+                      session: Session = Depends(db)):
+    """One page of the change feed, filtered server-side.
+
+    Returns {items, total, offset, limit, has_more} rather than a bare list:
+    `total` is what lets the page say 「1,234件中 50件を表示」 instead of
+    silently implying the page is everything. Filtering here rather than in the
+    browser is the actual fix — the old page fetched 200 rows and filtered
+    them locally, so a filter could report "no results" for a colleague who
+    simply had no activity in the newest 200.
+    """
+    def _parse(value: str | None):
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            raise HTTPException(400, f"invalid date: {value!r} (use YYYY-MM-DD)")
+
+    return notif_svc.query_activity(
+        session, who=who, kind=kind, q=q, offset=offset, limit=limit,
+        date_from=_parse(date_from), date_to=_parse(date_to))
 
 
 @app.get("/notifications/summary")
@@ -873,10 +911,48 @@ def export_forecasts_xlsx(tier: int | None = None):
 
 
 @app.get("/export/audit-log")
-def export_audit_log_xlsx():
-    from ..export.excel import export_audit_log
-    path = export_audit_log()
+def export_audit_log_xlsx(year: int | None = None, month: int | None = None):
+    """The change history as Excel.
+
+    With year+month: that whole calendar month, with each author's name and
+    department resolved — the monthly report the team files. Without: the
+    latest 500 entries, which is the quick "what happened recently" download.
+    """
+    if year and month:
+        from ..export.excel import export_audit_month
+        if not 1 <= month <= 12:
+            raise HTTPException(400, "month must be 1-12")
+        path, _ = export_audit_month(year, month)
+    else:
+        from ..export.excel import export_audit_log
+        path = export_audit_log()
     return FileResponse(path, filename=path.name, media_type=XLSX_MEDIA)
+
+
+@app.post("/audit/archive")
+def archive_audit_month(request: Request, year: int, month: int,
+                        commit: bool = False, force: bool = False,
+                        session: Session = Depends(db)):
+    """Export a finished month and clear it from the feed.
+
+    Admin-only and dry-run by default: this is the one endpoint that DELETES
+    audit records, and it will not do so unless the exported workbook has been
+    written, reopened and counted (see audit_archive). A failed verification
+    aborts with nothing deleted.
+    """
+    ident = getattr(request.state, "identity", None)
+    perms.require_admin(session, ident)
+    if not 1 <= month <= 12:
+        raise HTTPException(400, "month must be 1-12")
+    from ..audit_archive import archive
+    by = ident.audit_author if ident is not None else "audit-archive"
+    result = archive(year, month, commit=commit, force=force, by=by)
+    if result["status"] == "verification-failed":
+        # 500, not 400: the caller did nothing wrong — the server could not
+        # produce a trustworthy export, and nothing was deleted.
+        raise HTTPException(500, f"archive aborted, nothing deleted: "
+                                 f"{result.get('verification')}")
+    return result
 
 
 # --- production frontend serving --------------------------------------------

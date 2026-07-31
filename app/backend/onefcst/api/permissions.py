@@ -116,19 +116,26 @@ def scope_of_item(session: Session, item: Item) -> str | None:
 def _lineage_scope(session: Session, item_id: int) -> str | None:
     """Sub-file key derived from where this item's plan rows were ingested.
 
-    Imported lazily: subfile_config reads config.ONE_DIR at import time, and
-    pulling it in at module scope would drag NAS-path resolution into the
-    permission layer.
+    Expressed with the ORM rather than raw ``text()`` SQL, and that is not a
+    style preference: raw SQL bypasses SQLAlchemy's schema_translate_map, so
+    under the dual-dialect test harness (which gives each test its own
+    PostgreSQL schema) it silently queried the wrong schema and found nothing.
+    Six permission tests failed on PostgreSQL while passing on SQLite. Anything
+    that must run on both dialects goes through the ORM.
+
+    subfile_config is imported lazily because it reads config.ONE_DIR at import
+    time, and pulling that in at module scope would drag NAS-path resolution
+    into the permission layer.
     """
-    from sqlalchemy import text
-
     from ..ingestion.subfile_config import FILES
+    from ..models import PlanValue, Snapshot
 
-    rows = session.execute(text("""
-        SELECT DISTINCT s.source_file
-        FROM plan_values p JOIN snapshots s ON s.id = p.snapshot_id
-        WHERE p.item_id = :item_id
-    """), {"item_id": item_id}).scalars().all()
+    rows = session.scalars(
+        select(Snapshot.source_file)
+        .join(PlanValue, PlanValue.snapshot_id == Snapshot.id)
+        .where(PlanValue.item_id == item_id)
+        .distinct()
+    ).all()
 
     by_filename = {meta["file"]: key for key, meta in FILES.items()}
     for source_file in rows:

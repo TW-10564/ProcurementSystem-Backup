@@ -234,11 +234,15 @@ class OrderAction(Base):
 class AuditLog(Base):
     __tablename__ = "audit_log"
     id = Column(Integer, primary_key=True)
-    who = Column(String)
+    # Indexed because the feed's every query sorts by `at` and filters by
+    # `who`. Unindexed, a date-sorted scan is what makes a log page feel
+    # broken once it holds tens of thousands of rows — and the monthly archive
+    # keeps it smaller than that only if somebody remembers to run it.
+    who = Column(String, index=True)
     what = Column(String, nullable=False)
     before = Column(Text)
     after = Column(Text)
-    at = Column(DateTime, default=datetime.utcnow)
+    at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
 class UserAccess(Base):

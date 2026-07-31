@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../i18n/LanguageContext";
 import { ssoEnabled } from "../auth/msal";
+import { backendSignInEnabled, startBackendSignIn } from "../auth/backendAuth";
 
 export default function Landing() {
   const { lang, setLang, t } = useLang();
@@ -29,7 +30,10 @@ export default function Landing() {
 
         <div className="landing-card">
           <h2>{t("landing_enter_title")}</h2>
-          <button className="landing-enter-btn" onClick={() => navigate("/app")}>
+          <button className="landing-enter-btn" onClick={async () => {
+              if (await backendSignInEnabled()) return startBackendSignIn("/app");
+              navigate("/app");
+            }}>
             {t("landing_enter_button")}
           </button>
           <div className="landing-enter-note">

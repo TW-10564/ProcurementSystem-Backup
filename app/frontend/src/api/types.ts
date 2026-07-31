@@ -53,6 +53,12 @@ export interface Notification {
   who: string | null;
   what: string;
   at: string;
+  /** Classified server-side. The UI used to guess this by string-matching
+   *  `what`; once the server filters by kind, two classifiers would disagree
+   *  the day either is edited. */
+  kind?: "adjust" | "confirm" | "warn" | "system";
+  before?: string | null;
+  after?: string | null;
 }
 
 export interface MismatchGroup {
@@ -469,4 +475,14 @@ export interface DirectoryUser {
   display_name: string | null;
   job_title: string | null;
   department: string | null;
+}
+
+/** One page of the audit feed. `total` is what lets the UI be honest about
+ *  truncation — 「1,234件中 50件を表示」 rather than implying this is all. */
+export interface NotificationPage {
+  items: Notification[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
 }

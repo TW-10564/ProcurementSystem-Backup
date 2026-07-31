@@ -38,6 +38,18 @@ SessionLocal = sessionmaker(bind=engine, future=True)
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    # create_all skips a table that already exists, and therefore skips indexes
+    # ADDED to an existing table — so a new index would never appear on a
+    # database that predates it, on either dialect. Create them explicitly;
+    # checkfirst makes it a no-op when they are already there.
+    for table in Base.metadata.tables.values():
+        for index in table.indexes:
+            try:
+                index.create(bind=engine, checkfirst=True)
+            except Exception as exc:                           # noqa: BLE001
+                # An index is a performance aid, never a correctness one:
+                # failing to add one must not stop the app from starting.
+                print(f"[db] index {index.name} skipped: {exc}")
 
 
 def get_session():

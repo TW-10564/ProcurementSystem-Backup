@@ -7,7 +7,7 @@ already trust and verify it directly.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import openpyxl
@@ -133,6 +133,56 @@ def export_backtest() -> Path:
     out = EXPORT_DIR / f"予測精度検証_{date.today():%Y%m%d}.xlsx"
     wb.save(out)
     return out
+
+
+def export_audit_month(year: int, month: int, out_dir: Path | None = None) -> tuple[Path, int]:
+    """One calendar month of the audit log, as the monthly report.
+
+    Returns (path, row_count) — the count is what `audit_archive` verifies the
+    written file against before it is allowed to delete anything.
+
+    Differs from export_audit_log() below in the two ways that matter for a
+    report someone files: it is bounded by MONTH rather than "latest 500", so
+    the file is a complete record of a period rather than a snapshot; and it
+    resolves each author's name and department from user_profiles, because a
+    report read a year later by someone in another department needs to say
+    「山田 太郎 / 購買本部」, not `m_yamada@twave.co.jp`.
+    """
+    from ..models import UserProfile
+
+    start = datetime(year, month, 1)
+    end = datetime(year + (month == 12), (month % 12) + 1, 1)
+
+    session = get_session()
+    try:
+        rows = (session.query(AuditLog)
+                .filter(AuditLog.at >= start, AuditLog.at < end)
+                .order_by(AuditLog.at.asc()).all())
+        # Ascending: a report is read start-of-month first, unlike the screen
+        # feed which shows newest first.
+        people = {p.email: p for p in session.query(UserProfile).all()}
+    finally:
+        session.close()
+
+    wb, ws = _new_wb("変更履歴")
+    ws.append([f"操作・変更履歴 {year}年{month}月 — 出力日時: {datetime.now():%Y-%m-%d %H:%M}"])
+    ws.append([f"対象期間: {start:%Y-%m-%d} 〜 {end - timedelta(days=1):%Y-%m-%d}　件数: {len(rows)}"])
+    ws.append([])
+    _header(ws, ["日時", "担当者", "部署", "メールアドレス", "内容", "変更前", "変更後"])
+    for r in rows:
+        p = people.get((r.who or "").lower())
+        ws.append([r.at.strftime("%Y-%m-%d %H:%M:%S"),
+                  (p.display_name if p and p.display_name else (r.who or "system")),
+                  (p.department if p and p.department else ""),
+                  r.who or "",
+                  r.what, (r.before or "")[:200], (r.after or "")[:200]])
+    _autosize(ws, (20, 18, 18, 28, 44, 30, 30))
+
+    out_dir = out_dir or (EXPORT_DIR / "audit_archive")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"変更履歴_{year}{month:02d}.xlsx"
+    wb.save(out)
+    return out, len(rows)
 
 
 def export_audit_log(limit: int = 500) -> Path:

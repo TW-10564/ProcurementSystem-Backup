@@ -302,6 +302,45 @@ ENTRA_ENABLED = bool(ENTRA_TENANT_ID and ENTRA_CLIENT_ID)
 BOOTSTRAP_ADMINS = [e.strip().lower() for e in os.environ.get(
     "ONEFCST_BOOTSTRAP_ADMINS", "").split(",") if e.strip()]
 
+
+# ── Backend-driven sign-in (confidential client) ──────────────────────────
+# Set ENTRA_CLIENT_SECRET and the app performs the authorization-code exchange
+# ITSELF and issues its own session cookie, instead of MSAL doing PKCE in the
+# browser. The tenant/client ids then leave the JS bundle and no Microsoft
+# token is ever stored in the browser.
+#
+# Note the ids are still visible in the address bar during sign-in — the
+# redirect to login.microsoftonline.com carries both. They are identifiers,
+# not credentials. The SECRET is the credential, and it lives only here.
+ENTRA_CLIENT_SECRET = os.environ.get("ONEFCST_ENTRA_CLIENT_SECRET", "").strip()
+
+# Where Entra sends the browser back. MUST match a redirect URI registered
+# under the **Web** platform (not SPA — that is the public-client one).
+#   production : https://one-forecast.twave.co.jp/auth/callback
+#   local dev  : http://localhost:5173/api/auth/callback   (via the Vite proxy,
+#                which keeps the cookie same-origin)
+OAUTH_REDIRECT_URI = os.environ.get("ONEFCST_OAUTH_REDIRECT_URI", "").strip()
+
+# Signs the session cookie. Rotating it logs everyone out, which is the
+# intended emergency control. Generated per-process when unset so a
+# misconfigured deployment fails closed at restart rather than running with a
+# predictable key — but then sessions do not survive a restart, so it MUST be
+# set in production.
+SESSION_SECRET = os.environ.get("ONEFCST_SESSION_SECRET", "").strip()
+
+# How long a signed-in session lasts before Microsoft is consulted again.
+SESSION_HOURS = float(os.environ.get("ONEFCST_SESSION_HOURS", "8"))
+
+# Secure flag on the session cookie. On by default; the only reason to turn it
+# off is local development over plain http, where the browser would otherwise
+# refuse to store it.
+SESSION_COOKIE_SECURE = os.environ.get(
+    "ONEFCST_SESSION_COOKIE_SECURE", "1") not in ("0", "false", "False", "")
+
+# True when the backend should run sign-in itself.
+OAUTH_BFF_ENABLED = bool(ENTRA_TENANT_ID and ENTRA_CLIENT_ID
+                         and ENTRA_CLIENT_SECRET and OAUTH_REDIRECT_URI)
+
 # --- rate limiting ----------------------------------------------------------
 # Basic per-client request cap (see api/rate_limit.py) — added 2026-07-23 as
 # the cheapest defense against a leaked/guessed ONEFCST_API_KEY being

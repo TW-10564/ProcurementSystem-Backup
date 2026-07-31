@@ -98,6 +98,35 @@ from .models import (Item, ForecastRun, Forecast, Adjustment, AccuracyScore,
                      UserAccess, UserScope, ItemScopeOverride)
 
 
+def _lock_down(path: Path) -> None:
+    """Make a backup readable only by the user that wrote it (audit F5).
+
+    A database dump is the single most sensitive file this system produces: it
+    contains every adjustment, the whole audit trail and the permissions
+    roster — i.e. staff names and addresses — in one portable file. Created
+    with the default umask it lands world-readable (0644), so any account on
+    the DGX could copy the entire database without touching the application or
+    leaving a trace in its audit log.
+
+    Best-effort by design: on a filesystem that does not implement POSIX modes
+    a failure here must not abort a rebuild that has already succeeded, so it
+    warns rather than raising.
+    """
+    try:
+        path.chmod(0o600)
+    except OSError as exc:
+        print(f"[backup] could not restrict permissions on {path.name}: {exc}")
+
+
+def _lock_down_dir(path: Path) -> None:
+    """Same reasoning for the directory: 0700 stops the FILENAMES (which carry
+    timestamps, and so a record of when the system ran) being listed."""
+    try:
+        path.chmod(0o700)
+    except OSError as exc:
+        print(f"[backup] could not restrict permissions on {path}/: {exc}")
+
+
 def _prune_backups(backup_dir: Path, pattern: str) -> int:
     """Shared retention for both backup formats — keep the newest
     ONEFCST_DB_BACKUP_KEEP generations, best-effort."""
@@ -142,6 +171,7 @@ def _backup_postgres(database_url: str, backup_dir: Path) -> dict:
             f"without a backup")
 
     backup_dir.mkdir(parents=True, exist_ok=True)
+    _lock_down_dir(backup_dir)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     dest = backup_dir / f"onefcst-{stamp}.dump"
 
@@ -179,6 +209,8 @@ def _backup_postgres(database_url: str, backup_dir: Path) -> dict:
             f"{(proc.stderr or '').strip()[:300]}) — rebuild aborted so the "
             f"existing data is not dropped without a copy")
 
+    # Immediately after the dump exists and before anything else can read it.
+    _lock_down(dest)
     pruned = _prune_backups(backup_dir, "onefcst-*.dump")
     return {"status": "ok", "path": str(dest), "bytes": dest.stat().st_size,
             "kept": int(os.environ.get("ONEFCST_DB_BACKUP_KEEP", "7")),
@@ -227,6 +259,7 @@ def backup_db() -> dict:
 
     backup_dir = src.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
+    _lock_down_dir(backup_dir)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     dest = backup_dir / f"{src.stem}-{stamp}.db"
 
@@ -247,6 +280,10 @@ def backup_db() -> dict:
         for c in (dst, con):
             if c is not None:
                 c.close()
+
+    # Same as the pg_dump path: a copy of the whole database must not be left
+    # world-readable (audit F5).
+    _lock_down(dest)
 
     # Retention: the DB is ~31MB, so keep a bounded number of generations
     # rather than growing without limit on a weekly schedule.

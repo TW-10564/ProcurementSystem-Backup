@@ -15,7 +15,7 @@ import type {
   LlmDraftResult,
   Me,
   MismatchReport,
-  Notification,
+  NotificationPage,
   OrderActionInfo,
   OrderSuggestions,
   PlannerAccuracy,
@@ -37,7 +37,18 @@ const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
 
 const http = axios.create({
   baseURL: BASE_URL,
-  headers: API_KEY ? { "X-API-Key": API_KEY } : undefined,
+  headers: {
+    ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
+    // Marks every call as coming from this app's own JavaScript. The backend
+    // requires it on cookie-authenticated writes: a cross-origin <form> or
+    // <img> can carry the session cookie but CANNOT set a custom header
+    // without passing a CORS preflight, so this is the CSRF defence that
+    // complements SameSite=Lax.
+    "X-Requested-With": "onefcst",
+  },
+  // Send the HttpOnly session cookie issued by /auth/callback. Without this
+  // axios omits credentials on cross-origin calls and every request is a 401.
+  withCredentials: true,
 });
 
 /**
@@ -52,6 +63,9 @@ const http = axios.create({
  * shared-key path is byte-for-byte unchanged.
  */
 http.interceptors.request.use(async (cfg) => {
+  // Only meaningful in the MSAL/public-client mode. With backend sign-in the
+  // session cookie carries identity and acquireApiToken() returns null, so
+  // no Authorization header is attached and nothing changes here.
   const token = await acquireApiToken();
   if (token) cfg.headers.Authorization = `Bearer ${token}`;
   return cfg;
@@ -102,6 +116,12 @@ export const api = {
 
   /** Who the SERVER thinks is calling — the check when writes look misattributed. */
   me: () => http.get<Me>("/me").then((r) => r.data),
+
+  /** Whether the backend runs sign-in itself. Booleans only — with the
+   *  confidential-client flow the browser is never told the tenant/client id. */
+  authStatus: () =>
+    http.get<{ backend_sign_in: boolean; session_hours: number }>("/auth/status")
+      .then((r) => r.data),
 
   /** Forward the Graph record so colleagues' UIs can resolve this email to a name. */
   updateMyProfile: (profile: GraphProfile) =>
@@ -198,9 +218,30 @@ export const api = {
     factor?: number;
   }) => http.post<Adjustment>("/adjustments", body).then((r) => r.data),
 
-  notifications: (limit = 50) =>
+  /** One page of the change feed. Filtering and paging are SERVER-side — the
+   *  page previously fetched 200 rows and filtered locally, so a filter could
+   *  report "no results" for someone who simply had no activity in that 200. */
+  notifications: (params: {
+    limit?: number;
+    offset?: number;
+    who?: string | null;
+    kind?: string | null;
+    q?: string | null;
+    date_from?: string | null;
+    date_to?: string | null;
+  } = {}) =>
     http
-      .get<Notification[]>("/notifications", { params: { limit } })
+      .get<NotificationPage>("/notifications", {
+        params: {
+          limit: params.limit ?? 50,
+          offset: params.offset ?? 0,
+          who: params.who || undefined,
+          kind: params.kind || undefined,
+          q: params.q || undefined,
+          date_from: params.date_from || undefined,
+          date_to: params.date_to || undefined,
+        },
+      })
       .then((r) => r.data),
 
   notificationSummary: () =>

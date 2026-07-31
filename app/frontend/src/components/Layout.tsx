@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useLang } from "../i18n/LanguageContext";
 import SignedInUser from "../auth/SignedInUser";
 import { signOut, ssoEnabled } from "../auth/msal";
+import { backendSignInEnabled, backendSignOut } from "../auth/backendAuth";
 import type { TranslationKey } from "../i18n/translations";
 import {
   AccuracyIcon,
@@ -92,7 +93,13 @@ export default function Layout() {
               prompt — which on a shared PC is the opposite of logging out. */}
           <button
             className="logout-btn"
-            onClick={() => (ssoEnabled ? void signOut() : navigate("/"))}
+            onClick={async () => {
+              // Backend-run sign-in owns the session cookie, so the server has
+              // to clear it — calling MSAL here would clear nothing.
+              if (await backendSignInEnabled()) return backendSignOut();
+              if (ssoEnabled) return void signOut();
+              navigate("/");
+            }}
           >
             <LogoutIcon className="logout-icon" />
             {t("logout")}

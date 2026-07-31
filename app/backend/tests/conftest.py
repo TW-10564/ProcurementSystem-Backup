@@ -85,6 +85,16 @@ def _pg_backed_sqlite_engines():
             return real_create_engine(url, *args, **kwargs)
         schema = f"test_{uuid.uuid4().hex[:12]}"
         kwargs.pop("poolclass", None)
+        # SQLite-only driver options must not be forwarded to psycopg, which
+        # rejects unknown connection options outright:
+        #   psycopg.ProgrammingError: invalid connection option
+        #   "check_same_thread"
+        # Fixtures that drive TestClient legitimately pass
+        # connect_args={"check_same_thread": False} so the app's worker thread
+        # can share one in-memory database. On PostgreSQL that concern does not
+        # exist — connections are real and thread-safe — so the argument is
+        # simply dropped rather than translated.
+        kwargs.pop("connect_args", None)
         eng = real_create_engine(TEST_DATABASE_URL, *args,
                                  poolclass=sqlalchemy.pool.NullPool, **kwargs)
         with eng.begin() as conn:

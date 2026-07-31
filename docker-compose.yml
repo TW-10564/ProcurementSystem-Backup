@@ -87,6 +87,15 @@ services:
       ONEFCST_ENTRA_ALLOWED_GROUPS: ${ONEFCST_ENTRA_ALLOWED_GROUPS:-}
       # Named-user allowlist, for before Entra "assignment required" is set.
       ONEFCST_ENTRA_ALLOWED_EMAILS: ${ONEFCST_ENTRA_ALLOWED_EMAILS:-}
+      # Backend-driven sign-in (confidential client). Set the secret and the
+      # redirect URI and the server runs the flow itself; leave the secret
+      # empty and the MSAL/PKCE path is used instead.
+      ONEFCST_ENTRA_CLIENT_SECRET: ${ONEFCST_ENTRA_CLIENT_SECRET:-}
+      ONEFCST_OAUTH_REDIRECT_URI: ${ONEFCST_OAUTH_REDIRECT_URI:-}
+      ONEFCST_SESSION_SECRET: ${ONEFCST_SESSION_SECRET:-}
+      ONEFCST_SESSION_HOURS: ${ONEFCST_SESSION_HOURS:-8}
+      ONEFCST_SESSION_COOKIE_SECURE: ${ONEFCST_SESSION_COOKIE_SECURE:-1}
+      ONEFCST_BOOTSTRAP_ADMINS: ${ONEFCST_BOOTSTRAP_ADMINS:-}
 
       # Read-only NAS sources, as seen INSIDE the container (see volumes).
       ONE_SOURCE_DIR: /mnt/nas/one

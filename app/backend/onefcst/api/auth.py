@@ -38,7 +38,14 @@ def _is_public(request: Request) -> bool:
     the tenant/client ids, which are visible in the browser's URL bar during
     any OIDC redirect, plus booleans — never a key or a secret.
     """
-    if request.url.path in ("/health", "/auth/config"):
+    if request.url.path in ("/health", "/auth/config", "/auth/status"):
+        return True
+    # The sign-in endpoints themselves cannot require a sign-in. /auth/login
+    # starts the flow, /auth/callback completes it (and is reached with only
+    # Microsoft's code + our state cookie), /auth/logout must work even from
+    # an already-expired session — otherwise "log out" fails exactly when it
+    # matters. Each performs its own validation; see api/oauth.py.
+    if request.url.path.startswith("/auth/"):
         return True
     return request.url.path == "/maintenance" and request.method == "GET"
 
@@ -79,6 +86,25 @@ async def require_identity(
         return await require_api_key(request, x_api_key)
 
     if _is_public(request):
+        return
+
+    # 1) The backend-issued session cookie (the confidential-client flow).
+    #    Checked first because when it is configured it is how every browser
+    #    arrives; a bearer token is then only ever a scripted caller.
+    from . import oauth
+    session = oauth.read_session(request.cookies.get(oauth.SESSION_COOKIE, ""))
+    if session is not None:
+        # A cookie is sent by the browser automatically, so unlike a bearer
+        # token its mere presence is NOT evidence the user intended this
+        # request. SameSite=Lax already blocks cross-site form posts; this
+        # header check covers the rest, because no cross-origin form or image
+        # can set a custom header without a passing CORS preflight.
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            if request.headers.get("x-requested-with", "").lower() != "onefcst":
+                raise HTTPException(
+                    403, "missing X-Requested-With header on a cookie-"
+                         "authenticated write")
+        request.state.identity = session
         return
 
     token = ""
