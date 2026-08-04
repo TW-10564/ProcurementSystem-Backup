@@ -23,6 +23,7 @@ import onefcst.rebuild_status as rebuild_status_mod
 from onefcst import maintenance
 from onefcst.api.main import app
 from onefcst.api.schemas import AdjustmentOut
+from onefcst.models import AuditLog
 from onefcst.timeutil import as_utc, as_utc_iso, utc_now
 
 
@@ -93,6 +94,22 @@ def test_maintenance_keeps_the_original_since_across_message_edits():
 
 def test_health_time_is_aware_utc(client):
     assert _parsed(client.get("/health").json()["time"]).utcoffset() == timedelta(0)
+
+
+def test_notifications_feed_timestamp_is_aware_utc(client, isolated_api_db):
+    """The regression this reported (2026-08-04): the Notifications/audit-log
+    page showed adjustment times nine hours early because notifications.py's
+    `_row` still emitted `r.at.isoformat()` — naive — while the rest of the
+    sweep above had already moved to `as_utc_iso`. The browser parsed the
+    offset-less string as local time on top of a value that was already UTC,
+    so every event displayed nine hours in the past."""
+    isolated_api_db.add(AuditLog(who="tanaka", what="adjustment#1 recorded (sku)",
+                                 before="{}", after="{}"))
+    isolated_api_db.commit()
+
+    items = client.get("/notifications").json()["items"]
+    assert items, "expected the seeded AuditLog row back from the feed"
+    assert _parsed(items[0]["at"]).utcoffset() == timedelta(0)
 
 
 def test_response_models_serialize_naive_columns_with_an_offset():

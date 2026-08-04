@@ -37,6 +37,7 @@ from datetime import datetime
 from sqlalchemy import func, or_
 
 from ..models import AuditLog
+from ..timeutil import as_utc_iso
 
 # Order matters: first match wins. "rejected" is tested before "confirmed",
 # because a rejection message frequently contains both words.
@@ -92,7 +93,7 @@ def _kind_filter(query, kind: str):
 
 
 def _row(r: AuditLog) -> dict:
-    return {"id": r.id, "who": r.who, "what": r.what, "at": r.at.isoformat(),
+    return {"id": r.id, "who": r.who, "what": r.what, "at": as_utc_iso(r.at),
             "before": r.before, "after": r.after, "kind": classify(r.what)}
 
 
