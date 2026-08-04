@@ -51,15 +51,27 @@ def test_localize_what_renders_japanese_from_the_event_code():
     assert ja != "order_action#1 marked ordered"
 
 
-def test_localize_what_falls_back_to_english_for_legacy_rows_with_no_code():
-    """Rows written before this feature existed have no `_code` in `after`
-    (or no `after` at all) — must degrade to the English sentence, not error."""
+def test_localize_what_translates_legacy_rows_with_no_code_via_pattern_match():
+    """Rows written before the _code/_args mechanism existed have no `_code`
+    in `after` (or no `after` at all) — they must still translate via the
+    legacy regex fallback (_legacy_ja), not degrade to English forever."""
     assert notif_svc.localize_what("adjustment#1 recorded (sku)", None, "ja") \
-        == "adjustment#1 recorded (sku)"
+        == "SKU の調整を記録しました"
     assert notif_svc.localize_what("adjustment#1 recorded (sku)", "{}", "ja") \
-        == "adjustment#1 recorded (sku)"
+        == "SKU の調整を記録しました"
     assert notif_svc.localize_what("adjustment#1 recorded (sku)", "not json", "ja") \
+        == "SKU の調整を記録しました"
+    # English requests are always unaffected, regardless of _code/legacy match.
+    assert notif_svc.localize_what("adjustment#1 recorded (sku)", None, "en") \
         == "adjustment#1 recorded (sku)"
+
+
+def test_localize_what_falls_back_to_english_for_truly_unrecognized_rows():
+    """A row whose `what` matches none of the known legacy shapes (e.g.
+    hand-written or from a future write site not yet covered) must degrade
+    to the English sentence, not error."""
+    assert notif_svc.localize_what("something totally unstructured happened", None, "ja") \
+        == "something totally unstructured happened"
 
 
 def test_localize_what_falls_back_to_english_on_a_missing_template_arg():

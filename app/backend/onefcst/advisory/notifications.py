@@ -206,21 +206,82 @@ def _event_from_after(after: str | None) -> dict | None:
     return obj
 
 
+def _reason_display(reason: str | None) -> str:
+    reason = (reason or "").strip()
+    return f"（理由: {reason}）" if reason else ""
+
+
+# Rows written before the _code/_args mechanism above existed (anything
+# recorded before the Japanese audit-log localization feature shipped) have
+# no `_code` in `after`, so the lookup above falls through to English
+# forever unless something else recognises the sentence shape. These
+# regexes parse the handful of templates every write site used at the time
+# (adjustments.py, order_actions.py, rules.py, discontinuation_review.py,
+# access_roster.py) and translate them the same way EVENT_TEMPLATES does for
+# new rows — same "interim, kept in one place" spirit as KIND_PATTERNS
+# above. Order matters no more than it does there: patterns don't overlap.
+_LEGACY_PATTERNS: list[tuple[re.Pattern, "callable"]] = [
+    (re.compile(r"^adjustment#\d+ recorded \(([a-z]+)(?:, item=(.+))?\)$"),
+     lambda m: "{item} の調整を記録しました".format(
+         item=m.group(2) if m.group(2) else f"{_SCOPE_JA.get(m.group(1), m.group(1))}")),
+    (re.compile(r"^order_action#\d+ marked ordered \(item#\d+ (.+?), qty=([^,]+), expected=(.+)\)$"),
+     lambda m: "{item} の発注を記録しました（数量: {qty}、到着予定日: {date}）".format(
+         item=m.group(1),
+         qty="—" if m.group(2) == "None" else m.group(2),
+         date="—" if m.group(3) == "None" else m.group(3))),
+    (re.compile(r"^order_action#\d+ confirmed received \(item#\d+ (.+)\)$"),
+     lambda m: f"{m.group(1)} の入荷を確認しました"),
+    (re.compile(r"^order_action#\d+ dismissed \(item#\d+ (.+?)\): ?(.*)$"),
+     lambda m: f"{m.group(1)} の発注を却下しました{_reason_display(m.group(2))}"),
+    (re.compile(r"^order_action#\d+ expected date pushed to (\S+) \(item#\d+ (.+)\)$"),
+     lambda m: f"{m.group(2)} の到着予定日を {m.group(1)} に変更しました"),
+    (re.compile(r"^order_action#\d+ arrival due \((.+)\)$"),
+     lambda m: f"到着予定日（{m.group(1)}）が到来しました。入荷確認または予定日の変更をお願いします（警告）"),
+    (re.compile(r"^compat_rule#\d+ confirmed \((.+?) / (.+?)\)$"),
+     lambda m: f"{m.group(1)} と {m.group(2)} の適合ルールを承認しました"),
+    (re.compile(r"^compat_rule#\d+ rejected \((.+?) / (.+?)\): ?(.*)$"),
+     lambda m: f"{m.group(1)} と {m.group(2)} の適合ルールを却下しました{_reason_display(m.group(3))}"),
+    (re.compile(r"^compat_rule#\d+ edited \((.+?) / (.+?)\)$"),
+     lambda m: f"{m.group(1)} と {m.group(2)} の適合ルールを変更しました"),
+    (re.compile(r"^discontinuation_suggestion#\d+ confirmed \(item#\d+ (.+)\)$"),
+     lambda m: f"{m.group(1)} を生産終了として確定しました"),
+    (re.compile(r"^discontinuation_suggestion#\d+ rejected \((.+?)\): ?(.*)$"),
+     lambda m: f"{m.group(1)} の生産終了提案を却下しました{_reason_display(m.group(2))}"),
+    (re.compile(r"^access (created|updated) from roster: (\S+) -> (\S+)(?: scopes=(\[.*\]))?$"),
+     lambda m: (f"{m.group(2)} に {m.group(3)} 権限を付与しました" if m.group(1) == "created"
+                else f"{m.group(2)} の {m.group(3)} 権限を更新しました")
+                + (f"（範囲: {m.group(4)}）" if m.group(4) else "") + "（ロスターインポート）"),
+]
+
+
+def _legacy_ja(what: str) -> str | None:
+    for pattern, translate in _LEGACY_PATTERNS:
+        m = pattern.match(what or "")
+        if m:
+            try:
+                return translate(m)
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
 def localize_what(what: str, after: str | None, lang: str) -> str:
-    """English `what` unchanged unless the caller asked for Japanese AND the
-    row carries a recognised `_code` — see the module-level comment above."""
+    """English `what` unchanged unless the caller asked for Japanese. Rows
+    carrying a recognised `_code` (see the module-level comment above) use
+    the exact template a new row would; older rows fall back to pattern-
+    matching the legacy sentence shape via `_legacy_ja`."""
     if lang != "ja":
         return what
     ev = _event_from_after(after)
-    if ev is None:
-        return what
-    template = EVENT_TEMPLATES.get(ev.get("_code", ""))
-    if template is None:
-        return what
-    try:
-        return template.format(**ev.get("_args", {}))
-    except (KeyError, IndexError, ValueError):
-        return what
+    if ev is not None:
+        template = EVENT_TEMPLATES.get(ev.get("_code", ""))
+        if template is not None:
+            try:
+                return template.format(**ev.get("_args", {}))
+            except (KeyError, IndexError, ValueError):
+                pass
+    legacy = _legacy_ja(what)
+    return legacy if legacy is not None else what
 
 
 def _row(r: AuditLog, lang: str = "en") -> dict:
