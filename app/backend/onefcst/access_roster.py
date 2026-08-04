@@ -62,7 +62,6 @@ def _pick(row: dict, key: str) -> str:
             return str(row[header]).strip()
     return ""
 
-
 def _scope_keys() -> list[str]:
     from .ingestion.subfile_config import FILES
     return list(FILES.keys())

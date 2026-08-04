@@ -6,10 +6,12 @@ what has to live there: `CLAUDE.md`, `Dockerfile`, `docker-compose.yml`,
 
 | Path | What |
 |---|---|
+| `DGX_DEPLOY_RUNBOOK.md` | **Start here to deploy.** What is already built, what to copy across, and the ordered steps on the DGX (2026-07-31) |
 | `SSO_TO_GOLIVE_TASKS.md` | The live plan: SSO → DGX setup → deployment checks → handover |
 | `SECURITY_AUDIT_2026-07-30.md` | Pre-deployment security audit; findings F1–F8 and what was fixed |
 | `Phase1_Project_Charter.md` | Formal charter (v1.1, matches the finalized Phase-1 scope) |
 | `Phase1_Requirements_Suite.md` | Requirements companion to the charter |
+| `UAT_Test_Cases.md` | UAT test cases for the live site, assigned per person from `deploy/roster.csv` |
 | `business/` | Deliverables for management: 稟議書, 要件定義書, プロジェクト憲章書, the filled requirements workbook, and `Data Summary.xlsx` (referenced from `forecasting.py`'s accuracy notes) |
 | `presentation/` | Report drafts, the presentation script, and the Phase-1→Phase-2 migration diagrams |
 | `assets/` | Logos and other shared images |

@@ -13,6 +13,7 @@ from datetime import datetime
 
 from ..models import CompatRule, AuditLog, Item
 from ..engine.compat import draft_cpu_mb_rules, unclassified_report
+from .notifications import event as _event
 
 
 class RuleNotFound(Exception):
@@ -33,6 +34,13 @@ def _log(session, who: str, what: str, before, after) -> None:
                          after=json.dumps(after, default=str) if after is not None else None))
 
 
+def _part_names(session, rule: CompatRule) -> tuple[str, str]:
+    a = session.get(Item, rule.part_a_id)
+    b = session.get(Item, rule.part_b_id)
+    return (a.canonical_name if a else f"item#{rule.part_a_id}",
+           b.canonical_name if b else f"item#{rule.part_b_id}")
+
+
 def confirm_rule(session, rule_id: int, author: str) -> CompatRule:
     rule = session.get(CompatRule, rule_id)
     if rule is None:
@@ -41,8 +49,10 @@ def confirm_rule(session, rule_id: int, author: str) -> CompatRule:
     rule.status = "confirmed"
     rule.confirmed_by = author
     rule.confirmed_at = datetime.utcnow()
-    _log(session, author, f"compat_rule#{rule_id} confirmed", before,
-        {"status": "confirmed", "confirmed_by": author})
+    part_a, part_b = _part_names(session, rule)
+    _log(session, author, f"compat_rule#{rule_id} confirmed ({part_a} / {part_b})", before,
+        {"status": "confirmed", "confirmed_by": author,
+         **_event("compat_rule.confirmed", part_a=part_a, part_b=part_b)})
     session.commit()
     return rule
 
@@ -55,8 +65,12 @@ def reject_rule(session, rule_id: int, author: str, reason: str = "") -> CompatR
     rule.status = "rejected"
     rule.confirmed_by = author
     rule.confirmed_at = datetime.utcnow()
-    _log(session, author, f"compat_rule#{rule_id} rejected: {reason}", before,
-        {"status": "rejected", "confirmed_by": author, "reason": reason})
+    part_a, part_b = _part_names(session, rule)
+    reason_display = f"（理由: {reason}）" if reason else ""
+    _log(session, author, f"compat_rule#{rule_id} rejected ({part_a} / {part_b}): {reason}",
+        before, {"status": "rejected", "confirmed_by": author, "reason": reason,
+                **_event("compat_rule.rejected", part_a=part_a, part_b=part_b,
+                        reason_display=reason_display)})
     session.commit()
     return rule
 
@@ -93,7 +107,9 @@ def edit_rule(session, rule_id: int, author: str, relation: str | None = None,
                     + (f" | original: {original}" if original else ""))
     after = {"relation": rule.relation, "confidence": rule.confidence,
             "note": rule.note}
-    _log(session, author, f"compat_rule#{rule_id} edited", before, after)
+    part_a, part_b = _part_names(session, rule)
+    after.update(_event("compat_rule.edited", part_a=part_a, part_b=part_b))
+    _log(session, author, f"compat_rule#{rule_id} edited ({part_a} / {part_b})", before, after)
     session.commit()
     return rule
 

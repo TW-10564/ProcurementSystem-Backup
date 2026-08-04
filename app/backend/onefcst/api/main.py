@@ -9,6 +9,7 @@ Run:  cd app/backend && uvicorn onefcst.api.main:app --host 0.0.0.0 --port 8600
 """
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -127,6 +128,7 @@ async def _run_rebuild_in_background(entry: dict) -> None:
     try:
         report = await asyncio.to_thread(run_rebuild)
         rebuild_status_mod.finish(entry, report)
+        _invalidate_report_cache()
     except Exception as e:
         rebuild_status_mod.fail(entry, repr(e))
 
@@ -306,8 +308,12 @@ def grant_access(request: Request, body: AccessGrantIn,
     for key in dict.fromkeys(body.scopes):
         session.add(UserScope(email=email, scope_key=key, granted_by=by))
 
-    session.add(AuditLog(who=by, what=f"access granted: {email} -> {body.role}"
-                         + (f" scopes={sorted(set(body.scopes))}" if body.scopes else "")))
+    scopes_english = f" scopes={sorted(set(body.scopes))}" if body.scopes else ""
+    scopes_display = f"（担当: {'、'.join(sorted(set(body.scopes)))}）" if body.scopes else ""
+    session.add(AuditLog(
+        who=by, what=f"access granted: {email} -> {body.role}" + scopes_english,
+        after=json.dumps(notif_svc.event("access.granted", email=email, role=body.role,
+                                        scopes_display=scopes_display))))
     session.commit()
     return {"email": email, "role": body.role, "scopes": sorted(set(body.scopes))}
 
@@ -321,7 +327,8 @@ def revoke_access(request: Request, email: str, session: Session = Depends(db)):
     n = session.query(UserAccess).filter(UserAccess.email == email).delete()
     session.query(UserScope).filter(UserScope.email == email).delete()
     by = ident.audit_author if ident is not None else "unknown"
-    session.add(AuditLog(who=by, what=f"access revoked: {email}"))
+    session.add(AuditLog(who=by, what=f"access revoked: {email}",
+                         after=json.dumps(notif_svc.event("access.revoked", email=email))))
     session.commit()
     # Revoking leaves the person able to READ — that is the intended floor,
     # not an oversight. Removing sign-in entirely is an Entra assignment.
@@ -369,7 +376,9 @@ def set_item_scope(request: Request, body: ItemScopeIn,
         row = ItemScopeOverride(canonical_name=name, assigned_by=by)
         session.add(row)
     row.scope_key = body.scope_key
-    session.add(AuditLog(who=by, what=f"item scope set: {name} -> {body.scope_key}"))
+    session.add(AuditLog(who=by, what=f"item scope set: {name} -> {body.scope_key}",
+                         after=json.dumps(notif_svc.event("access.item_scope_set", name=name,
+                                                          scope_key=body.scope_key))))
     session.commit()
     return {"canonical_name": name, "scope_key": body.scope_key}
 
@@ -447,6 +456,7 @@ def confirm_compat_rule(request: Request, rule_id: int, body: ConfirmRequest, se
         r = rules_svc.confirm_rule(session, rule_id, effective_author(request, body.author))
     except rules_svc.RuleNotFound as e:
         raise HTTPException(404, str(e))
+    _invalidate_report_cache()  # mismatch's confirmed_rule_classifications depends on this
     items = {i.id: i.canonical_name for i in session.query(Item).all()}
     return CompatRuleOut(id=r.id, part_a_id=r.part_a_id, part_a_name=items.get(r.part_a_id, "?"),
                          part_b_id=r.part_b_id, part_b_name=items.get(r.part_b_id, "?"),
@@ -460,6 +470,7 @@ def reject_compat_rule(request: Request, rule_id: int, body: RejectRequest, sess
         r = rules_svc.reject_rule(session, rule_id, effective_author(request, body.author), body.reason)
     except rules_svc.RuleNotFound as e:
         raise HTTPException(404, str(e))
+    _invalidate_report_cache()
     items = {i.id: i.canonical_name for i in session.query(Item).all()}
     return CompatRuleOut(id=r.id, part_a_id=r.part_a_id, part_a_name=items.get(r.part_a_id, "?"),
                          part_b_id=r.part_b_id, part_b_name=items.get(r.part_b_id, "?"),
@@ -604,6 +615,7 @@ def bulk_confirm(request: Request, author: str = "", threshold: float = 0.9,
     # you want a self-asserted name on the record.
     n = rules_svc.bulk_confirm_high_confidence(
         session, effective_author(request, author), threshold)
+    _invalidate_report_cache()
     return {"confirmed": n, "threshold": threshold}
 
 
@@ -630,6 +642,7 @@ def create_adjustment(request: Request, body: AdjustmentIn, session: Session = D
                                       reason=body.reason, factor=body.factor)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    _invalidate_report_cache()  # forecasts-summary's orders_needed reflects adjustments
     item = session.get(Item, a.item_id) if a.item_id else None
     a.item_name = item.canonical_name if item else None
     return a
@@ -651,7 +664,7 @@ def get_notifications(limit: int = 50, offset: int = 0,
                       who: str | None = None, kind: str | None = None,
                       q: str | None = None,
                       date_from: str | None = None, date_to: str | None = None,
-                      session: Session = Depends(db)):
+                      lang: str = "en", session: Session = Depends(db)):
     """One page of the change feed, filtered server-side.
 
     Returns {items, total, offset, limit, has_more} rather than a bare list:
@@ -660,6 +673,11 @@ def get_notifications(limit: int = 50, offset: int = 0,
     browser is the actual fix — the old page fetched 200 rows and filtered
     them locally, so a filter could report "no results" for a colleague who
     simply had no activity in the newest 200.
+
+    `lang="ja"` renders `what` in Japanese for rows that carry a structured
+    event code (notifications.EVENT_TEMPLATES) — see notifications.py's
+    localize_what(). `what` search (`q`) still matches the underlying
+    English text regardless of `lang`; only the returned text changes.
     """
     def _parse(value: str | None):
         if not value:
@@ -669,13 +687,20 @@ def get_notifications(limit: int = 50, offset: int = 0,
         except ValueError:
             raise HTTPException(400, f"invalid date: {value!r} (use YYYY-MM-DD)")
 
+    # Best-effort: surfaces "order due" alerts (order_svc.raise_due_alerts)
+    # the moment anyone opens Notifications or the Dashboard, independent of
+    # whether the background scheduler is enabled for this deployment
+    # (ONEFCST_SCHEDULER_ENABLED defaults to 0 — see deploy/compose.env.example).
+    order_svc.raise_due_alerts(session)
+
     return notif_svc.query_activity(
         session, who=who, kind=kind, q=q, offset=offset, limit=limit,
-        date_from=_parse(date_from), date_to=_parse(date_to))
+        date_from=_parse(date_from), date_to=_parse(date_to), lang=lang)
 
 
 @app.get("/notifications/summary")
 def get_notification_summary(session: Session = Depends(db)):
+    order_svc.raise_due_alerts(session)
     return notif_svc.activity_summary(session)
 
 
@@ -712,18 +737,20 @@ def run_forecast(request: Request, horizon: int = 6, session: Session = Depends(
     accident."""
     perms.require_admin(session, getattr(request.state, "identity", None))
     from ..forecasting import generate
-    return generate(session, horizon=horizon)
+    result = generate(session, horizon=horizon)
+    _invalidate_report_cache()
+    return result
 
 
 @app.get("/forecasts/summary")
 def forecast_summary(session: Session = Depends(db)):
-    # Cached on the same DB-mtime key as the reports below. This is the
-    # dashboard's landing call — every page mount and every open tab asks for
-    # it — and recomputing it costs seconds. Uncached, several clients polling
-    # at once serialised behind one worker and pushed the response past 100s
-    # (measured 2026-07-28 with two browsers open), which the frontend
-    # surfaces as an empty page. A rebuild or a new forecast run changes the
-    # DB mtime, so the cache invalidates itself exactly when the numbers move.
+    # Cached like the reports below. This is the dashboard's landing call —
+    # every page mount and every open tab asks for it — and recomputing it
+    # costs seconds. Uncached, several clients polling at once serialised
+    # behind one worker and pushed the response past 100s (measured
+    # 2026-07-28 with two browsers open), which the frontend surfaces as an
+    # empty page. run_forecast() above (and a rebuild) explicitly invalidate
+    # the cache, so this stays fresh exactly when the numbers actually move.
     from .. import forecast_views
     return _cached("forecasts-summary", lambda: forecast_views.summary(session))
 
@@ -775,20 +802,33 @@ def get_plan_vs_actual(item_id: int, history_months: int = 1, session: Session =
 
 # -------------------------------------------------------------- reports ----
 # mismatch/backtest recompute over the full plan-value history (~6-10s each);
-# the dashboard requests both on every mount, so cache until the next build.
-# Inputs only change when onefcst.build rewrites the DB — key on the DB mtime.
-_report_cache: dict[str, tuple[float, object]] = {}
+# the dashboard requests both on every mount, so cache until something that
+# feeds them actually changes.
+#
+# Used to key on os.path.getmtime(DB_PATH) instead of invalidating
+# explicitly — DB_PATH is the SQLite path, which happens to get touched by
+# every SQLite write (so it accidentally worked there), but is completely
+# unrelated to the DB once DATABASE_URL points at Postgres. On Postgres that
+# mtime never changes, so a report cached before the first rebuild/forecast
+# run stayed stuck at that stale value (e.g. forecasts-summary showing
+# run: null and empty categories) for the process's entire lifetime — hit in
+# production on the DGX deployment 2026-07-31: "Recalculate" ran successfully
+# but the dashboard kept showing nothing, because it was still serving the
+# cache entry computed before the first real forecast run existed. Explicit
+# invalidation at every mutating endpoint below works identically on both
+# backends.
+_report_cache: dict[str, object] = {}
+
+
+def _invalidate_report_cache() -> None:
+    _report_cache.clear()
 
 
 def _cached(key: str, compute):
-    from ..config import DB_PATH
-    import os
-    mtime = os.path.getmtime(DB_PATH)
-    hit = _report_cache.get(key)
-    if hit and hit[0] == mtime:
-        return hit[1]
+    if key in _report_cache:
+        return _report_cache[key]
     result = compute()
-    _report_cache[key] = (mtime, result)
+    _report_cache[key] = result
     return result
 
 

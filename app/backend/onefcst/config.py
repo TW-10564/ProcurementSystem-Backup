@@ -205,14 +205,18 @@ FISCAL_START_MONTH = 8      # 期 runs Aug–Jul
 MOQ_EXCESSIVE_MONTHS = float(os.environ.get("ONEFCST_MOQ_EXCESSIVE_MONTHS", "6"))
 
 # --- scheduler ----------------------------------------------------------------
-# Automatic recurring forecast generation (scheduler.py). Runs in-process
-# alongside the API — no external cron needed for this deployment size.
-# Set ONEFCST_SCHEDULER_ENABLED=0 to disable (e.g. for manual-only control).
-# Default interval is WEEKLY (168h), not daily — confirmed 2026-07-07 the SAP
-# stock export only refreshes Mondays, and the procurement team's own review
-# cadence is a Friday stock-setting meeting; running more often than the
-# underlying source data changes would just recompute the same baseline.
-SCHEDULER_ENABLED = os.environ.get("ONEFCST_SCHEDULER_ENABLED", "1") != "0"
+# Automatic recurring re-ingestion + forecast generation (scheduler.py). Runs
+# in-process alongside the API — no external cron needed for this deployment
+# size. Defaults OFF (2026-08-03): is_due() treats "no ForecastRun yet" as due
+# immediately, so on a fresh/rebuilt DB the very first poll after a restart
+# fired a full rebuild_preserving.run() NAS re-ingestion — indistinguishable
+# from "opening the app rebuilds it." Both rebuild and forecast generation
+# are meant to be human-triggered (the "Rebuild from NAS" / "Recalculate"
+# buttons, `/build/rebuild` and `/forecasts/run`), which work regardless of
+# this flag. Set ONEFCST_SCHEDULER_ENABLED=1 to opt back into the weekly
+# automatic cadence (interval below, matched to the Monday SAP export /
+# Friday review cycle) for a deployment that wants it.
+SCHEDULER_ENABLED = os.environ.get("ONEFCST_SCHEDULER_ENABLED", "0") != "0"
 SCHEDULER_INTERVAL_HOURS = float(os.environ.get("ONEFCST_SCHEDULER_INTERVAL_HOURS", "168"))
 SCHEDULER_POLL_SECONDS = float(os.environ.get("ONEFCST_SCHEDULER_POLL_SECONDS", "300"))
 

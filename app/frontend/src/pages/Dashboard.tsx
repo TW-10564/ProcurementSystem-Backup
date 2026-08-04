@@ -20,7 +20,7 @@ export default function Dashboard() {
     Promise.all([
       api.mismatchReport(),
       api.backtestReport(),
-      api.notifications({ limit: 6 }),
+      api.notifications({ limit: 6, lang }),
       api.compatRules({ status: "draft" }),
       api.compatRules({ status: "confirmed" }),
     ])
@@ -31,7 +31,7 @@ export default function Dashboard() {
         setRuleCounts({ draft: draft.length, confirmed: confirmed.length });
       })
       .catch((e) => setError(String(e.message ?? e)));
-  }, []);
+  }, [lang]);
 
   const highCount = mismatch?.groups.filter((g) => g.severity === "HIGH").length ?? 0;
   const mediumCount = mismatch?.groups.filter((g) => g.severity === "MEDIUM").length ?? 0;

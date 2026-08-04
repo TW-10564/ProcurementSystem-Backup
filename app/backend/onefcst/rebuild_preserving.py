@@ -525,17 +525,52 @@ def _restore(session, snap: dict) -> dict:
     # UserProfile likewise has no item FK. `.get()` rather than `[...]` so a
     # snapshot taken by an older build (before this table existed) still
     # restores instead of raising KeyError halfway through.
+    #
+    # Unlike every other bucket here, this table is written by ORDINARY LIVE
+    # TRAFFIC (advisory/profiles.py's touch()/apply_graph(), on every /me and
+    # Graph sync), not just by rebuilds — a signed-in user can hit /me during
+    # the window between build.run()'s drop_all() and this restore step,
+    # inserting a fresh row into the now-empty table for their own email. A
+    # blind INSERT here then collides with that row on the email unique index
+    # (IntegrityError, confirmed in production 2026-07-31 — aborted the whole
+    # rebuild over a table that has nothing to do with NAS data). Check for
+    # that row first and update it in place instead of assuming the table is
+    # still empty.
+    existing_profiles = {p.email: p for p in session.query(UserProfile).all()}
     for u in snap.get("user_profiles", []):
-        session.add(UserProfile(**u))
+        row = existing_profiles.get(u["email"])
+        if row is None:
+            session.add(UserProfile(**u))
+        else:
+            for field, value in u.items():
+                setattr(row, field, value)
 
     # Same `.get()` reasoning: a snapshot taken before these tables existed
-    # must still restore rather than raise halfway through.
+    # must still restore rather than raise halfway through. Same live-traffic
+    # race as user_profiles above is theoretically possible here too (PUT
+    # /access and PUT /access/item-scope are admin-only and infrequent, so far
+    # narrower a window in practice, but the same unique constraints apply) —
+    # check-then-create/update rather than blind insert, for consistency.
+    existing_access = {a.email: a for a in session.query(UserAccess).all()}
     for u in snap.get("user_access", []):
-        session.add(UserAccess(**u))
+        row = existing_access.get(u["email"])
+        if row is None:
+            session.add(UserAccess(**u))
+        else:
+            for field, value in u.items():
+                setattr(row, field, value)
+    existing_scopes = {(s.email, s.scope_key) for s in session.query(UserScope).all()}
     for u in snap.get("user_scopes", []):
-        session.add(UserScope(**u))
+        if (u["email"], u["scope_key"]) not in existing_scopes:
+            session.add(UserScope(**u))
+    existing_overrides = {o.canonical_name: o for o in session.query(ItemScopeOverride).all()}
     for o in snap.get("item_scope_overrides", []):
-        session.add(ItemScopeOverride(**o))
+        row = existing_overrides.get(o["canonical_name"])
+        if row is None:
+            session.add(ItemScopeOverride(**o))
+        else:
+            for field, value in o.items():
+                setattr(row, field, value)
 
     # Actual: build.run() already re-inserted fresh SAP-shipment rows for
     # this run's rolling window before we get here — see module docstring

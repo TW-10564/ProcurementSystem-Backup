@@ -46,6 +46,7 @@ from .db import get_session
 from .forecasting import generate, latest_run
 from . import rebuild_preserving
 from . import rebuild_status
+from .advisory import order_actions as order_svc
 
 
 def is_due(session, interval_hours: float = SCHEDULER_INTERVAL_HOURS) -> bool:
@@ -93,6 +94,22 @@ def run_if_due() -> dict | None:
     return result
 
 
+def check_order_alerts() -> int:
+    """Every poll tick (not gated by is_due()'s weekly cadence — order dates
+    arrive on their own schedule): alert once per order whose expected
+    arrival date has been reached. See order_svc.raise_due_alerts for the
+    dedup rule. The API also calls this on every Notifications/Dashboard
+    load so alerts still appear when the scheduler is disabled for this
+    deployment (ONEFCST_SCHEDULER_ENABLED defaults to 0) — this is the
+    proactive half, so an alert can land even if nobody opens the app that
+    day."""
+    session = get_session()
+    try:
+        return order_svc.raise_due_alerts(session)
+    finally:
+        session.close()
+
+
 async def loop(poll_seconds: float = SCHEDULER_POLL_SECONDS) -> None:
     print(f"[scheduler] started: interval={SCHEDULER_INTERVAL_HOURS}h "
          f"poll={poll_seconds}s")
@@ -107,6 +124,12 @@ async def loop(poll_seconds: float = SCHEDULER_POLL_SECONDS) -> None:
                      f"{result['planner_snapshots_archived']} planner snapshots archived")
         except Exception as e:                      # noqa: BLE001
             print(f"[scheduler] run failed: {e!r}")
+        try:
+            n = await asyncio.to_thread(check_order_alerts)
+            if n:
+                print(f"[scheduler] raised {n} order-arrival alert(s)")
+        except Exception as e:                      # noqa: BLE001
+            print(f"[scheduler] order-alert check failed: {e!r}")
         await asyncio.sleep(poll_seconds)
 
 

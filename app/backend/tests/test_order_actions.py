@@ -107,3 +107,64 @@ def test_list_active_only_includes_ordered_status(session):
     active = order_svc.list_active(session)
     assert set(active.keys()) == {a.id}
     assert active[a.id].id == oa_a.id
+
+
+# --------------------------------------------------------------- alerts ---
+
+def test_raise_due_alerts_logs_once_the_date_arrives(session):
+    item = seed_item(session)
+    oa = order_svc.mark_ordered(session, item, qty_ordered=100, note="",
+                                expected_arrival_date=date(2026, 8, 1), author="alice")
+    assert order_svc.raise_due_alerts(session, today=date(2026, 8, 1)) == 1
+    logs = session.query(AuditLog).filter(AuditLog.who == "system").all()
+    assert len(logs) == 1
+    assert f"order_action#{oa.id}" in logs[0].what
+    assert "TESTPART" in logs[0].what
+
+
+def test_raise_due_alerts_ignores_orders_not_yet_due(session):
+    item = seed_item(session)
+    order_svc.mark_ordered(session, item, qty_ordered=100, note="",
+                           expected_arrival_date=date(2026, 8, 15), author="alice")
+    assert order_svc.raise_due_alerts(session, today=date(2026, 8, 1)) == 0
+    assert session.query(AuditLog).filter(AuditLog.who == "system").count() == 0
+
+
+def test_raise_due_alerts_ignores_orders_with_no_expected_date(session):
+    item = seed_item(session)
+    order_svc.mark_ordered(session, item, qty_ordered=100, note="",
+                           expected_arrival_date=None, author="alice")
+    assert order_svc.raise_due_alerts(session, today=date(2026, 8, 1)) == 0
+
+
+def test_raise_due_alerts_is_idempotent_per_order_and_date(session):
+    """Calling it again on the same day (every scheduler poll, every
+    Notifications-page load) must not spam a fresh log row each time."""
+    item = seed_item(session)
+    order_svc.mark_ordered(session, item, qty_ordered=100, note="",
+                           expected_arrival_date=date(2026, 8, 1), author="alice")
+    order_svc.raise_due_alerts(session, today=date(2026, 8, 1))
+    order_svc.raise_due_alerts(session, today=date(2026, 8, 2))
+    assert session.query(AuditLog).filter(AuditLog.who == "system").count() == 1
+
+
+def test_raise_due_alerts_fires_again_after_the_date_is_extended(session):
+    """Pushing the expected date out and having the NEW date arrive is a
+    distinct event from the original alert, so it should alert again rather
+    than staying silent because "this order already alerted once"."""
+    item = seed_item(session)
+    oa = order_svc.mark_ordered(session, item, qty_ordered=100, note="",
+                                expected_arrival_date=date(2026, 8, 1), author="alice")
+    order_svc.raise_due_alerts(session, today=date(2026, 8, 1))
+    order_svc.extend_expected_date(session, oa.id, date(2026, 8, 15), author="alice")
+    assert order_svc.raise_due_alerts(session, today=date(2026, 8, 1)) == 0
+    assert order_svc.raise_due_alerts(session, today=date(2026, 8, 15)) == 1
+    assert session.query(AuditLog).filter(AuditLog.who == "system").count() == 2
+
+
+def test_raise_due_alerts_stops_once_received_or_dismissed(session):
+    item = seed_item(session)
+    oa = order_svc.mark_ordered(session, item, qty_ordered=100, note="",
+                                expected_arrival_date=date(2026, 8, 1), author="alice")
+    order_svc.confirm_received(session, oa.id, author="alice")
+    assert order_svc.raise_due_alerts(session, today=date(2026, 8, 1)) == 0

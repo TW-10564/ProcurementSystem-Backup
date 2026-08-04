@@ -46,7 +46,7 @@ export default function Notifications() {
     let cancelled = false;
     setLoading(true);
     api
-      .notifications({ limit: PAGE, offset: 0, who: author, kind, q: query || null })
+      .notifications({ limit: PAGE, offset: 0, who: author, kind, q: query || null, lang })
       .then((page) => {
         if (cancelled) return;
         const items = Array.isArray(page?.items) ? page.items : [];
@@ -59,7 +59,7 @@ export default function Notifications() {
     return () => {
       cancelled = true;
     };
-  }, [author, kind, query]);
+  }, [author, kind, query, lang]);
 
   useEffect(() => {
     api
@@ -71,7 +71,7 @@ export default function Notifications() {
   const loadMore = () => {
     setLoading(true);
     api
-      .notifications({ limit: PAGE, offset: list.length, who: author, kind, q: query || null })
+      .notifications({ limit: PAGE, offset: list.length, who: author, kind, q: query || null, lang })
       .then((page) => {
         // Append, and de-duplicate by id: rows written in the same second
         // share a timestamp, and although the server tie-breaks on id, a row

@@ -12,7 +12,8 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from ..models import Adjustment, AuditLog
+from ..models import Adjustment, AuditLog, Item
+from .notifications import event as _event
 
 
 def record_adjustment(session, *, item_id: int | None, month, old_value: float | None,
@@ -34,11 +35,17 @@ def record_adjustment(session, *, item_id: int | None, month, old_value: float |
                      scope=scope, reason=reason.strip(), author=author)
     session.add(adj)
     session.flush()
+    item = session.get(Item, item_id) if item_id is not None else None
+    item_name = item.canonical_name if item else {"global": "全品目", "category": "このカテゴリ"}.get(scope, scope)
+    old_display = old_value if old_value is not None else "—"
+    month_display = month.isoformat() if month else "—"
     session.add(AuditLog(
-        who=author, what=f"adjustment#{adj.id} recorded ({scope})",
+        who=author, what=f"adjustment#{adj.id} recorded ({scope}, item={item.canonical_name if item else scope})",
         before=json.dumps({"old_value": old_value}, default=str),
-        after=json.dumps({"new_value": new_value, "factor": factor,
-                         "reason": reason}, default=str)))
+        after=json.dumps({"new_value": new_value, "factor": factor, "reason": reason,
+                         **_event("adjustment.recorded", item_name=item_name, scope=scope,
+                                 month_display=month_display, old_display=old_display,
+                                 new_display=new_value)}, default=str)))
     session.commit()
     return adj
 

@@ -1,7 +1,7 @@
 # ONE forecasting portal — DGX deployment.
 #
 #   cp deploy/compose.env.example .env      # then edit
-#   docker compose build --build-arg VITE_API_KEY="$ONEFCST_API_KEY"
+#   docker compose build      # do NOT pass --build-arg VITE_API_KEY — see F1 note below
 #   docker compose up -d
 #
 # TLS and Entra ID sign-in are handled by nginx on the HOST
@@ -49,8 +49,11 @@ services:
       context: .
       args:
         VITE_API_BASE: ${VITE_API_BASE:-/api}
-        # baked into the JS bundle at build time — see Dockerfile
-        VITE_API_KEY: ${ONEFCST_API_KEY:-}
+        # VITE_API_KEY deliberately NOT wired here (audit finding F1): with
+        # SSO enforcing identity, baking the shared key into the JS bundle
+        # would hand it to anyone who loads the page, bypassing SSO entirely.
+        # ONEFCST_API_KEY still reaches the BACKEND via the environment:
+        # block below — this only removes it from the frontend build.
         # Entra SSO. Public ids, safe to bake in; no client secret exists in
         # this flow. Both empty = pre-SSO bundle. Changing them needs a REBUILD.
         VITE_ENTRA_TENANT_ID: ${ONEFCST_ENTRA_TENANT_ID:-}
@@ -111,9 +114,17 @@ services:
       # branch so this reports "mounted directly" rather than a silent skip.
       ONEFCST_NAS_MODE: mount
 
-      ONEFCST_SCHEDULER_ENABLED: ${ONEFCST_SCHEDULER_ENABLED:-1}
+      ONEFCST_SCHEDULER_ENABLED: ${ONEFCST_SCHEDULER_ENABLED:-0}
       ONEFCST_DB_BACKUP_KEEP: ${ONEFCST_DB_BACKUP_KEEP:-7}
       ONEFCST_DROP_LOCK_TIMEOUT: ${ONEFCST_DROP_LOCK_TIMEOUT:-15s}
+      # Both mirror config.py's own Python-side defaults (the in-house
+      # server) — do NOT use a bare ${VAR:-}: compose still sets the
+      # container var to "" when the host var is unset, and os.environ.get
+      # only falls back to its default on a MISSING key, not an empty one,
+      # so a bare default would silently break the in-house fallback for
+      # every deployment that doesn't opt into an external LLM.
+      ONEFCST_LLM_URL: ${ONEFCST_LLM_URL:-http://172.16.5.105:8000}
+      ONEFCST_LLM_MODEL: ${ONEFCST_LLM_MODEL:-Qwen/Qwen3.6-35B-A3B-FP8}
       ONEFCST_LLM_API_KEY: ${ONEFCST_LLM_API_KEY:-}
     volumes:
       # The only writable location: SQLite-era data dir, still used for

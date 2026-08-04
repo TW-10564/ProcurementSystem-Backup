@@ -229,6 +229,7 @@ export const api = {
     q?: string | null;
     date_from?: string | null;
     date_to?: string | null;
+    lang?: string | null;
   } = {}) =>
     http
       .get<NotificationPage>("/notifications", {
@@ -240,6 +241,7 @@ export const api = {
           q: params.q || undefined,
           date_from: params.date_from || undefined,
           date_to: params.date_to || undefined,
+          lang: params.lang || undefined,
         },
       })
       .then((r) => r.data),

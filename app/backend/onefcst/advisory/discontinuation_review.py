@@ -19,6 +19,7 @@ import json
 from datetime import datetime
 
 from ..models import Suggestion, Item, AuditLog
+from .notifications import event as _event
 
 KIND = "discontinuation"
 
@@ -84,8 +85,11 @@ def confirm_suggestion(session, suggestion_id: int, author: str) -> Suggestion:
     s.reviewed_at = datetime.utcnow()
     if item is not None:
         item.eol_flag = True
+    item_name = item.canonical_name if item else f"item#{item_id}"
     _log(session, author, f"discontinuation_suggestion#{suggestion_id} confirmed "
-        f"(item#{item_id})", before, {"status": "confirmed", "item_eol_flag": True})
+        f"(item#{item_id} {item_name})", before,
+        {"status": "confirmed", "item_eol_flag": True,
+         **_event("discontinuation.confirmed", item_name=item_name)})
     session.commit()
     return s
 
@@ -104,7 +108,13 @@ def reject_suggestion(session, suggestion_id: int, author: str, reason: str = ""
     s.status = "rejected"
     s.reviewed_by = author
     s.reviewed_at = datetime.utcnow()
-    _log(session, author, f"discontinuation_suggestion#{suggestion_id} rejected: {reason}",
-        before, {"status": "rejected", "reason": reason})
+    item_id = _item_id_of(s)
+    item = session.get(Item, item_id) if item_id else None
+    item_name = item.canonical_name if item else f"suggestion#{suggestion_id}"
+    reason_display = f"（理由: {reason}）" if reason else ""
+    _log(session, author, f"discontinuation_suggestion#{suggestion_id} rejected "
+        f"({item_name}): {reason}", before,
+        {"status": "rejected", "reason": reason,
+         **_event("discontinuation.rejected", item_name=item_name, reason_display=reason_display)})
     session.commit()
     return s
