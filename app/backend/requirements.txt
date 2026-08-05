@@ -6,6 +6,16 @@ openpyxl==3.1.5
 pyxlsb==1.0.10
 pydantic==2.12.5
 
+# starlette.testclient.TestClient (fastapi.testclient) requires this at
+# import time — 8 test files use it (test_auth.py, test_entra_gate.py,
+# test_notifications.py, etc.). Not a transitive dependency of fastapi or
+# starlette, so a clean checkout has no TestClient without it — that's what
+# broke CI: this box's .venv already had it installed from an earlier setup,
+# masking the gap locally while GitHub's runners, which install strictly
+# from this file, failed every backend job on collection before a single
+# test ran.
+httpx2==2.9.1
+
 # Postgres driver — only needed when DATABASE_URL points at a real Postgres
 # instance (the DGX/production deployment); SQLite (local/WSL dev, the
 # default) needs no extra driver. Safe to always install.

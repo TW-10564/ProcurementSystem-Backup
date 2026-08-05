@@ -86,8 +86,17 @@ app.include_router(oauth_router)
 # cross-origin responses, so every /export/* download silently fell back to
 # its generic fallback name ("forecasts.xlsx") instead of the real Japanese
 # filename the backend sets — found 2026-07-27.
+# allow_credentials: the client (api/client.ts) sends withCredentials=true on
+# every request, for the BFF session cookie added alongside oauth.py. Without
+# this, the browser accepts the preflight (200 OK) but then refuses to send
+# the real request at all — every call on a genuinely cross-origin setup
+# (frontend/backend on different ports/hosts) fails as a silent axios
+# "Network Error", found 2026-08-05. Safe with CORS_ORIGINS being an explicit
+# list rather than "*": credentialed responses may never use a wildcard
+# origin, and they don't here.
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"],
-                   allow_headers=["*"], expose_headers=["Content-Disposition"])
+                   allow_headers=["*"], expose_headers=["Content-Disposition"],
+                   allow_credentials=True)
 
 
 def db():
