@@ -74,7 +74,8 @@ export default function Layout() {
       <header className="top-header">
         <div className="header-left">
           <Link to="/app" className="header-logo-link">
-            <img src="/twave-logo.png" alt={t("brand_name")} className="header-logo" />
+            <img src="/wave-mark.png" alt="" className="header-logo-mark" />
+            <span className="header-logo-text">{t("brand_name")}</span>
           </Link>
         </div>
         <div className="header-right">

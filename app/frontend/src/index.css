@@ -148,17 +148,27 @@ body {
 .header-logo-link {
   display: flex;
   align-items: center;
+  gap: 7px;
   line-height: 0;
   opacity: 1;
+  text-decoration: none;
   transition: opacity 0.13s;
 }
 .header-logo-link:hover {
   opacity: 0.82;
 }
-.header-logo {
+.header-logo-mark {
   height: 30px;
   width: auto;
   display: block;
+}
+.header-logo-text {
+  line-height: 1;
+  font-family: "Segoe UI", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #000;
 }
 
 .sidebar {
@@ -437,6 +447,17 @@ body {
   display: inline-flex;
   gap: 8px;
   margin: 28px 0 0 32px;
+}
+
+/* Group logo, kept only on the pre-signin landing page — the app shell past
+   sign-in uses the One Forecast wordmark instead (see .header-logo-text). */
+.landing-logo {
+  position: absolute;
+  top: 24px;
+  right: 32px;
+  height: 26px;
+  width: auto;
+  z-index: 2;
 }
 .landing-toggle button {
   border: 1px solid var(--line);

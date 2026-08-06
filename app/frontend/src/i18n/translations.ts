@@ -1,7 +1,7 @@
 export type Lang = "ja" | "en";
 
 export const translations = {
-  brand_name: { ja: "調達予測ポータル", en: "Procurement Forecast Portal" },
+  brand_name: { ja: "One Forecast", en: "One Forecast" },
   brand_sub: { ja: "需要予測・購買意思決定支援", en: "Demand forecasting & buying decision support" },
 
   landing_headline_1: { ja: "根拠が見える予測で、", en: "Forecasts you can see through, " },

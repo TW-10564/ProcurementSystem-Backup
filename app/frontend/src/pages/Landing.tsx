@@ -9,6 +9,7 @@ export default function Landing() {
 
   return (
     <div className="landing">
+      <img src="/twave-logo.png" alt="THIRDWAVE" className="landing-logo" />
       <div className="landing-toggle">
         <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>
           English
