@@ -39,14 +39,12 @@ export default function Profile() {
     <>
       <div className="page-head">
         <h2>{t("profile_title")}</h2>
-        <p>{t("profile_desc")}</p>
       </div>
 
       <div className="profile-grid">
         <section className="card">
           <div className="hd">
             <h3>{t("profile_identity")}</h3>
-            <span className="desc">{t("profile_identity_desc")}</span>
           </div>
           <div className="profile-body">
             <div className="profile-hero">

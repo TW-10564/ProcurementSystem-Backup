@@ -329,10 +329,15 @@ def _order_action_out(oa, today: date) -> dict:
 
 
 def _suggestion(item: Item, stock: StockState | None, demand: list[float]) -> dict | None:
+    """None only means "no stock to project from" (balance unknown). Zero
+    demand (e.g. a discontinuing item) still goes through suggest_order() —
+    found 2026-08-07 via UAT: short-circuiting here also blanked out
+    "projected stock" for zero-demand items even though it's trivially just
+    the current balance carried forward (no demand to draw it down). Their
+    zero demand still correctly produces action="none", not a suggested
+    order — see suggest_order()'s breach_month=None path."""
     balance, confidence = trusted_current_balance(stock)
     if balance is None:
-        return None
-    if sum(demand) == 0:
         return None
     s = suggest_order(current_balance=balance, monthly_demand=demand,
                       moq=item.moq, lead_time_days=effective_lead_time(item),

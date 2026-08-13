@@ -165,10 +165,14 @@ body {
 .header-logo-text {
   line-height: 1;
   font-family: "Segoe UI", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-  font-size: 1.15rem;
-  font-weight: 600;
+  font-size: 1.35rem;
+  font-weight: 700;
   letter-spacing: -0.01em;
-  color: #000;
+  background: linear-gradient(100deg, #000 0%, #1a1a1a 30%, #666 48%, #1a1a1a 60%, #000 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.15);
 }
 
 .sidebar {

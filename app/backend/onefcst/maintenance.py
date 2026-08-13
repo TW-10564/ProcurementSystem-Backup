@@ -36,7 +36,6 @@ STATE_PATH = Path(DATA_DIR) / "maintenance.json"
 DEFAULT_MESSAGE_JA = "システム更新中です。まもなく復旧します。"
 DEFAULT_MESSAGE_EN = "The system is being updated. It will be back shortly."
 
-
 def get_state() -> dict:
     """Never raises: a corrupt or unreadable state file must not take the
     whole site down — it degrades to "not in maintenance"."""
@@ -71,7 +70,6 @@ def set_state(enabled: bool, message: str = "", by: str | None = None) -> dict:
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(STATE_PATH)          # atomic: readers never see a half file
     return state
-
 
 def _cli() -> int:
     import sys

@@ -25,12 +25,7 @@ export const translations = {
 
   nav_profile: { ja: "プロフィール", en: "My Profile" },
   profile_title: { ja: "プロフィール", en: "My Profile" },
-  profile_desc: {
-    ja: "Microsoft Entra ID（社内アカウント）に登録されている情報です。変更は情報システム部門にご依頼ください。",
-    en: "Your details as registered in Microsoft Entra ID. To change them, ask IT — this page is a read-only view of the company directory.",
-  },
   profile_identity: { ja: "社員情報", en: "Employee details" },
-  profile_identity_desc: { ja: "Azure ADから取得", en: "Retrieved from Azure AD" },
   profile_display_name: { ja: "表示名", en: "Display name" },
   profile_given_name: { ja: "名", en: "Given name" },
   profile_surname: { ja: "姓", en: "Surname" },
