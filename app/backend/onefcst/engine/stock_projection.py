@@ -12,6 +12,34 @@ an order or writes anywhere outside the caller's own return value.
 """
 from __future__ import annotations
 
+import calendar
+from datetime import date
+
+
+def prorate_current_month(monthly_demand: list[float], first_month_start: date,
+                          snapshot_date: date | None) -> list[float]:
+    """Scale month 0's demand down to only the days remaining after the stock
+    snapshot date, so project_stock() doesn't subtract demand for days that
+    already happened and are already reflected in current_balance.
+
+    Found 2026-08-14 via UAT (W11HAD): current_balance is dated to whatever
+    day the snapshot was taken (e.g. the 9th), not the 1st of the month, but
+    monthly_demand[0] was always the FULL month's total — subtracting it
+    double-counted the elapsed days' demand (manual calc 15,031 vs system
+    12,289 for W11HAD; the 2,742 gap matched the Aug 1-9 demand almost
+    exactly). If the snapshot predates the first forecast month entirely
+    (stale stock data), no proration happens — that demand is genuinely
+    still all ahead of it, so subtracting the full month is correct."""
+    if not monthly_demand or snapshot_date is None or snapshot_date < first_month_start:
+        return monthly_demand
+    days_in_month = calendar.monthrange(first_month_start.year, first_month_start.month)[1]
+    month_end = first_month_start.replace(day=days_in_month)
+    remaining_days = max(0, (month_end - snapshot_date).days)
+    fraction = remaining_days / days_in_month
+    out = list(monthly_demand)
+    out[0] = (out[0] or 0.0) * fraction
+    return out
+
 
 def project_stock(current_balance: float, monthly_demand: list[float]) -> list[float]:
     """Month-end balance after each month's demand, starting from current_balance.

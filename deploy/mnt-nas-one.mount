@@ -43,12 +43,16 @@ Type=cifs
 #              filenames come back mangled and config.py's globs silently
 #              match NOTHING — the build fails with "missing source file"
 #              while the files are plainly there on the share.
-# vers=3.1.1 — modern SMB. Drop to 3.0 only if the NAS refuses to negotiate.
+# vers=3.0   — this NAS server rejects 3.1.1 outright ("Dialect not
+#              supported by server", cifs_mount -95, confirmed 2026-08-17 via
+#              dmesg). The box's live /etc/systemd/system copy had already
+#              been hand-patched to 3.0; this repo copy had drifted back to
+#              the old 3.1.1 value/comment. Use 3.0, not "modern SMB" 3.1.1.
 # uid/gid    — the container runs as uid 10001 (see Dockerfile); files must
 #              be readable by it through the bind mount.
 # nofail     — a NAS outage must not stop the DGX from booting.
 # _netdev    — tells systemd this needs the network before mounting.
-Options=ro,credentials=/etc/onefcst/nas.cred,iocharset=utf8,vers=3.1.1,uid=10001,gid=10001,file_mode=0440,dir_mode=0550,nofail,_netdev
+Options=ro,credentials=/etc/onefcst/nas.cred,iocharset=utf8,vers=3.0,uid=10001,gid=10001,file_mode=0440,dir_mode=0550,nofail,_netdev
 
 TimeoutSec=30
 

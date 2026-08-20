@@ -29,7 +29,7 @@ from . import config
 from .timeutil import as_utc_iso
 from .models import (AccuracyScore, Actual, Adjustment, Forecast, ForecastRun,
                     Item, PlanValue, Snapshot, StockState, WeeklyActual)
-from .engine.stock_projection import suggest_order
+from .engine.stock_projection import prorate_current_month, suggest_order
 from .engine.weekly import disaggregate_forecast
 from .advisory import order_actions as order_svc
 
@@ -300,20 +300,16 @@ def _apply_adjustments(item_id: int, months: list[date], baseline_qtys: list[flo
     return final, detail
 
 
-MIN_OBSERVED_LEAD_TIME_SAMPLES = 3
-
-
 def effective_lead_time(item: Item) -> float | None:
-    """Prefer real observed order->delivery history (median days, from
-    completed 購買計画 POs — see ingestion/lead_time.py) over 部品マスター's
-    static lead_time_days when there's enough of it to trust (found
-    2026-07-14: these can diverge sharply — an SSD's static value was 7
-    days, 6 real deliveries showed a median of 112). Falls back to the
-    static master value when observed history is thin or absent, never the
-    other way around — a single-digit sample count is too easily skewed by
-    one unusually fast or slow shipment to override a purpose-set estimate."""
-    if (item.observed_lead_time_samples or 0) >= MIN_OBSERVED_LEAD_TIME_SAMPLES:
-        return item.observed_lead_time_days
+    """LT always comes from 部品マスター's static lead_time_days — never from
+    per-category 購買計画 PO history (ingestion/lead_time.py's observed
+    median). Changed back 2026-08-14 at purchasing's request: for packaging
+    items the observed figure (measured from real POs in each individual
+    ONE file) ran 3-4x the master value (e.g. 外装箱大Ver2: 43 observed vs
+    14 master) and was inflating order-suggestion quantities well past what
+    purchasing's own plan called for. observed_lead_time_days/_samples are
+    still populated and shown in the UI for reference, just no longer feed
+    this calculation."""
     return item.lead_time_days
 
 
@@ -328,7 +324,8 @@ def _order_action_out(oa, today: date) -> dict:
     }
 
 
-def _suggestion(item: Item, stock: StockState | None, demand: list[float]) -> dict | None:
+def _suggestion(item: Item, stock: StockState | None, demand: list[float],
+                month_dates: list[date] | None = None) -> dict | None:
     """None only means "no stock to project from" (balance unknown). Zero
     demand (e.g. a discontinuing item) still goes through suggest_order() —
     found 2026-08-07 via UAT: short-circuiting here also blanked out
@@ -339,6 +336,8 @@ def _suggestion(item: Item, stock: StockState | None, demand: list[float]) -> di
     balance, confidence = trusted_current_balance(stock)
     if balance is None:
         return None
+    if month_dates and stock is not None and stock.snapshot_date is not None:
+        demand = prorate_current_month(demand, month_dates[0], stock.snapshot_date)
     s = suggest_order(current_balance=balance, monthly_demand=demand,
                       moq=item.moq, lead_time_days=effective_lead_time(item),
                       min_stock_days=item.min_stock_days,
@@ -364,7 +363,6 @@ def _is_unactionable_estimate(method: str | None, stock: StockState | None) -> b
     if method != "tier2_category_average":
         return False
     return stock is None or (stock.one_balance is None and stock.sap_qty is None)
-
 
 def summary(session) -> dict:
     run = _latest_run(session)
@@ -403,7 +401,7 @@ def summary(session) -> dict:
             c["next3_total"] += sum(qtys[:3])
             c["next6_total"] += sum(qtys[:6])
 
-        sugg = _suggestion(item, stock, qtys)
+        sugg = _suggestion(item, stock, qtys, months)
         if sugg and sugg["action"] == "suggest_order":
             orders_needed += 1
 
@@ -444,7 +442,7 @@ def order_suggestions(session) -> dict:
         qtys, _ = _apply_adjustments(item_id, month_dates,
                                      [f.baseline or 0.0 for f in frows], adjustments)
         stock = stocks.get(item_id)
-        sugg = _suggestion(item, stock, qtys)
+        sugg = _suggestion(item, stock, qtys, month_dates)
         if not sugg or sugg["action"] != "suggest_order":
             continue
         oa = active_order_actions.get(item_id)
@@ -541,7 +539,7 @@ def list_forecasts(session, q: str = "", category: str | None = None,
                                               [f.baseline or 0.0 for f in frows],
                                               adjustments)
         stock = stocks.get(item.id)
-        sugg = _suggestion(item, stock, qtys)
+        sugg = _suggestion(item, stock, qtys, month_dates)
         acc = acc_scores.get(item.id)
         wape_m1 = acc.wape_m1 if acc and acc.wape_m1 is not None else None
         wape_full = acc.wape if acc and acc.wape is not None else None
@@ -639,7 +637,8 @@ def item_detail(session, item_id: int) -> dict | None:
                 for m, v in plan_rows if m >= start][:len(forecast) or 12]
 
     stock = _latest_stock_state(session, item_id)
-    sugg = _suggestion(item, stock, [f["qty"] or 0.0 for f in forecast])
+    sugg = _suggestion(item, stock, [f["qty"] or 0.0 for f in forecast],
+                       [_as_date(f["month"]) for f in forecast])
     if sugg is not None:
         oa = order_svc.get_active(session, item_id)
         sugg["order_action"] = _order_action_out(oa, date.today()) if oa is not None else None

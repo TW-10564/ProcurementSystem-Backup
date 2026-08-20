@@ -12,7 +12,7 @@ export default defineConfig({
     // is in http_proxy, and 172.16.x is not in the no_proxy bypass list).
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8600',
+        target: process.env.VITE_DEV_API_TARGET || 'http://127.0.0.1:8600',
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api/, ''),
       },

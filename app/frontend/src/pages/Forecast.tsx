@@ -700,11 +700,11 @@ export default function Forecast() {
               value={exportTier}
               onChange={(e) => setExportTier(e.target.value as "all" | "1" | "2")}
               title={t("fc_export_scope_hint")}
-              style={{ padding: "6px 8px" }}
+              style={{ padding: "6px 8px", borderRadius: 8 }}
             >
-              <option value="all">{t("fc_export_scope_all")}</option>
-              <option value="1">{t("fc_export_scope_tier1")}</option>
-              <option value="2">{t("fc_export_scope_tier2")}</option>
+              <option value="all" style={{ borderRadius: 8 }}>{t("fc_export_scope_all")}</option>
+              <option value="1" style={{ borderRadius: 8 }}>{t("fc_export_scope_tier1")}</option>
+              <option value="2" style={{ borderRadius: 8 }}>{t("fc_export_scope_tier2")}</option>
             </select>
             <button
               className="btn"

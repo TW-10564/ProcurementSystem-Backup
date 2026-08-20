@@ -1,5 +1,7 @@
 """Unit tests for stock projection / order suggestion — pure math, no DB."""
-from onefcst.engine.stock_projection import project_stock, suggest_order
+from datetime import date
+
+from onefcst.engine.stock_projection import prorate_current_month, project_stock, suggest_order
 
 
 def test_project_stock_treats_none_demand_as_zero():
@@ -79,3 +81,35 @@ def test_min_stock_days_raises_safety_stock_and_breaches_earlier():
     assert with_buffer["action"] == "suggest_order"
     if no_buffer["action"] == "suggest_order":
         assert with_buffer["breach_month_index"] <= no_buffer["breach_month_index"]
+
+
+def test_prorate_current_month_scales_down_by_days_remaining():
+    """Found 2026-08-14 via UAT (W11HAD): current_balance is dated to
+    whatever day the stock snapshot was taken, not the 1st of the month, so
+    subtracting the FULL month's demand double-counts the days already
+    elapsed (already reflected in current_balance). Snapshot on the 9th of
+    a 31-day month leaves 22 days remaining -> demand scaled to 22/31."""
+    demand = [3100.0, 2000.0]
+    out = prorate_current_month(demand, date(2026, 8, 1), date(2026, 8, 9))
+    assert out[0] == 3100.0 * 22 / 31
+    assert out[1] == 2000.0   # only month 0 is touched
+
+
+def test_prorate_current_month_no_change_when_snapshot_predates_month():
+    """A stale snapshot from BEFORE the forecast horizon started (e.g. last
+    month's SAP pull, current month's forecast not yet begun) must not be
+    prorated — that demand is genuinely still entirely ahead of it."""
+    demand = [1000.0, 2000.0]
+    out = prorate_current_month(demand, date(2026, 8, 1), date(2026, 7, 27))
+    assert out == demand
+
+
+def test_prorate_current_month_no_change_without_a_snapshot_date():
+    demand = [1000.0, 2000.0]
+    assert prorate_current_month(demand, date(2026, 8, 1), None) == demand
+
+
+def test_prorate_current_month_near_zero_when_snapshot_is_last_day():
+    demand = [1000.0, 2000.0]
+    out = prorate_current_month(demand, date(2026, 8, 1), date(2026, 8, 31))
+    assert out[0] == 0.0

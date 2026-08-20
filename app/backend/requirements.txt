@@ -14,7 +14,7 @@ pydantic==2.12.5
 # masking the gap locally while GitHub's runners, which install strictly
 # from this file, failed every backend job on collection before a single
 # test ran.
-httpx2==2.9.1
+httpx==0.28.1
 
 # Postgres driver — only needed when DATABASE_URL points at a real Postgres
 # instance (the DGX/production deployment); SQLite (local/WSL dev, the
