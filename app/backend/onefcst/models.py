@@ -48,7 +48,17 @@ class Item(Base):
     # field, so both remain visible for a human to compare.
     observed_lead_time_days = Column(Float)
     observed_lead_time_samples = Column(Integer)
+    # Genuine per-item FLOOR — 部品マスター's own 最小在庫 when purchasing set
+    # one directly on this item ("never let this item run below N days").
     min_stock_days = Column(Float)
+    # Category-level CEILING — 在庫の持ち方's 在庫日数上限 ("don't let this
+    # category build up past N days"), applied via registry/build.py's
+    # category lookup. FIX 2026-08-20: this used to get merged into
+    # min_stock_days above and used as a reorder floor — the opposite of
+    # what the source column means — see stock_projection.suggest_order()'s
+    # docstring. Kept in its own field so a ceiling can never again be
+    # silently reused as someone's floor.
+    max_stock_days = Column(Float)
     supplier_a = Column(String)
     supplier_b = Column(String)
     supplier_c = Column(String)

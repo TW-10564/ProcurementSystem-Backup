@@ -82,6 +82,7 @@ def generate_for_item(session, item: Item, adjustments=None) -> dict | None:
     result = suggest_order(current_balance=current_balance, monthly_demand=demand,
                            moq=item.moq, lead_time_days=effective_lead_time(item),
                            min_stock_days=item.min_stock_days,
+                           max_stock_days=item.max_stock_days,
                            moq_excessive_months=config.MOQ_EXCESSIVE_MONTHS)
     result.update({"item_id": item.id, "item": item.canonical_name,
                   "category": item.category, "current_balance": current_balance})

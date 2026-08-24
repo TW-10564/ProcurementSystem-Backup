@@ -113,3 +113,53 @@ def test_prorate_current_month_near_zero_when_snapshot_is_last_day():
     demand = [1000.0, 2000.0]
     out = prorate_current_month(demand, date(2026, 8, 1), date(2026, 8, 31))
     assert out[0] == 0.0
+
+
+# ------------------------------------- max_stock_days ceiling vs floor -----
+# FIX 2026-08-20: a category CEILING (max_stock_days, "don't hold more than
+# N days") must never be treated as a reorder FLOOR — confirmed live on real
+# VGA stock (RX9070GRE: 5.16 on hand, 5.4/mo demand, was triggering a
+# 15.2-unit order to chase a 90-day ceiling it should never have been
+# chasing). These reproduce that shape with round numbers.
+
+def test_ceiling_alone_does_not_force_an_early_breach():
+    """An item with NO real per-item floor (min_stock_days=None) but a
+    90-day category ceiling must not breach just because it's under that
+    ceiling — it should only breach once it's genuinely at risk of running
+    out before a new order's lead time. balance=20, demand=10/mo, lead_time
+    =30d (1mo) => real risk threshold is 10 units. 20 is comfortably above
+    that, so month 0 must NOT breach, even though 20 < the 90-day ceiling's
+    implied 30 units."""
+    demand = [10.0] * 6
+    old_buggy_shape = suggest_order(current_balance=20.0, monthly_demand=demand,
+                                    moq=None, lead_time_days=30,
+                                    min_stock_days=90)   # ceiling wrongly passed as floor
+    fixed = suggest_order(current_balance=20.0, monthly_demand=demand,
+                          moq=None, lead_time_days=30,
+                          min_stock_days=None, max_stock_days=90)
+    assert old_buggy_shape["action"] == "suggest_order"
+    assert old_buggy_shape["breach_month_index"] == 0   # the bug: breaches immediately
+    assert fixed["breach_month_index"] != 0 or fixed["action"] == "none"
+
+
+def test_max_stock_days_still_caps_the_order_target_once_a_real_breach_happens():
+    """Once a genuine shortage is detected (balance below lead-time-demand),
+    the order must still be sized toward the category ceiling, not run away
+    unbounded — max_stock_days=90 (3 months at 10/mo) plus the usual
+    lead-time transit cushion, nothing more."""
+    demand = [10.0] * 6
+    r = suggest_order(current_balance=5.0, monthly_demand=demand, moq=None,
+                      lead_time_days=30, min_stock_days=None, max_stock_days=90)
+    assert r["action"] == "suggest_order"
+    assert r["target_level"] == 40.0   # 90d ceiling (30 units) + 1mo lead cushion (10)
+
+
+def test_no_ceiling_and_no_floor_still_produces_a_sane_lead_time_based_trigger():
+    """An item with neither a real floor nor a category ceiling must not go
+    unmanaged (reorder_point silently 0 forever) — it should still trigger
+    based on demand during lead time alone."""
+    demand = [10.0] * 6
+    r = suggest_order(current_balance=5.0, monthly_demand=demand, moq=None,
+                      lead_time_days=30, min_stock_days=None, max_stock_days=None)
+    assert r["action"] == "suggest_order"
+    assert r["safety_stock"] == 10.0    # lead-time(1mo) x demand(10/mo), no cushion

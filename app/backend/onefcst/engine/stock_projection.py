@@ -71,42 +71,71 @@ MOQ_EXCESSIVE_MONTHS = 6   # default flag threshold — months of average demand
 
 def suggest_order(*, current_balance: float, monthly_demand: list[float],
                   moq: float | None, lead_time_days: float | None,
-                  min_stock_days: float | None, avg_monthly_demand: float | None = None,
+                  min_stock_days: float | None, max_stock_days: float | None = None,
+                  avg_monthly_demand: float | None = None,
                   moq_excessive_months: float = MOQ_EXCESSIVE_MONTHS
                   ) -> dict:
     """Returns a suggestion dict — never an executed action.
 
-    safety_stock is derived from min_stock_days × average monthly demand
-    (falls back to the horizon's own average if avg_monthly_demand omitted).
-    order_by_month_index is shifted earlier by lead_time_days so the order
-    LANDS before the breach, not is merely placed on the breach date.
+    Two separate stock-days figures, two separate jobs — do not conflate them
+    (see FIX 2026-08-20 note below for why that matters):
 
-    target_level's extra cushion above safety_stock is sized to
-    lead_time_days (2026-07-17, replacing a flat "+1 average month"): the
-    legitimate reason to hold more than the bare safety line is that a NEW
-    order itself takes lead_time_days to arrive, during which demand keeps
-    drawing the balance down further — a flat one-month pad was unrelated
-    to that and inflated every suggestion regardless of the item's real
-    lead time (confirmed against real items 2026-07-17: an 18-day-lead-time
-    SSD was getting sized for ~1.75 months of demand despite lead time +
-    safety policy only justifying ~1.3 months). A zero/unknown lead time
-    now correctly adds no extra cushion beyond safety_stock itself."""
+    - min_stock_days is a genuine per-item FLOOR (部品マスター's own 最小在庫,
+      when purchasing has set one directly on that item) — "never let THIS
+      item run below N days." Feeds safety_stock, the reorder TRIGGER, same
+      as always.
+    - max_stock_days is a category-level CEILING (在庫の持ち方's 在庫日数上限,
+      applied via registry/build.py's category fallback) — "don't let stock
+      build up past N days for this category." Feeds target_level, the
+      order-SIZING cap, never the trigger.
+
+    reorder_point (still returned as "safety_stock" — that name is now
+    honestly accurate, unlike before) leaves an item WITH a real per-item
+    floor completely untouched (min_stock_days × demand, same as always —
+    that number is purchasing's own deliberate minimum for this specific
+    item and lead time was never part of that calculation). Only items with
+    NO real per-item floor (min_stock_days is None — this is exactly the
+    set of items the bug below affected) get a newly-computed trigger of
+    demand-during-lead-time instead of silently falling back to zero. No
+    extra cushion on top of that lead-time figure (2026-08-20 decision — no
+    data yet on how much buffer purchasing would want beyond bare lead-time
+    coverage; revisit once asked).
+
+    FIX 2026-08-20: previously, items with no real per-item floor still got
+    a category-level CEILING (a "don't exceed N days" cap) loaded straight
+    into min_stock_days and used AS the reorder trigger — "don't hold more
+    than 90 days" got flipped into "always hold at least 90 days," confirmed
+    live on real VGA stock (RX9070GRE: 5.16 on hand, 5.4/mo demand, was
+    triggering a 15.2-unit order to chase a 90-day ceiling it should never
+    have been chasing in the first place). That ceiling now lives in its own
+    field, max_stock_days, and only caps how much an order tops stock up to
+    once a real shortage is already happening — matching purchasing's own
+    description: order to approach the ceiling, never treat it as a minimum.
+
+    order_by_month_index is shifted earlier by lead_time_days so the order
+    LANDS before the breach, not is merely placed on the breach date."""
     demand_avg = avg_monthly_demand or (sum(d or 0.0 for d in monthly_demand) / len(monthly_demand)
                                         if monthly_demand else 0.0)
-    safety_stock = (min_stock_days or 0) / 30.0 * demand_avg
+    lead_months = (lead_time_days or 0) / 30.0
+    if min_stock_days is not None:
+        reorder_point = min_stock_days / 30.0 * demand_avg      # real per-item floor, untouched
+    else:
+        reorder_point = lead_months * demand_avg                 # no real floor — use lead-time coverage
     projected = project_stock(current_balance, monthly_demand)
-    breach = find_breach_month(projected, safety_stock)
+    breach = find_breach_month(projected, reorder_point)
 
     if breach is None:
         return {"action": "none", "reason": "stock does not breach safety threshold "
                "within the forecast horizon", "projected": [round(p, 1) for p in projected]}
 
-    lead_months = (lead_time_days or 0) / 30.0
     order_by_index = max(0, breach - int(lead_months + 0.999))   # round up, order early
 
-    # top up back to a healthy level: safety_stock plus enough to survive
-    # the lead time of the very order this suggestion is placing
-    target_level = safety_stock + lead_months * demand_avg
+    # top up back to a healthy level: the higher of reorder_point and the
+    # category ceiling (if any), plus enough to survive the lead time of the
+    # very order this suggestion is placing — same transit-cushion reasoning
+    # as before 2026-08-20, just now based on the correct base line
+    base_level = max((max_stock_days or 0) / 30.0 * demand_avg, reorder_point)
+    target_level = base_level + lead_months * demand_avg
     shortfall = target_level - projected[breach]
     qty = max(shortfall, 0.0)
     moq_applied = False
@@ -132,7 +161,8 @@ def suggest_order(*, current_balance: float, monthly_demand: list[float],
 
     return {"action": "suggest_order", "order_by_month_index": order_by_index,
            "breach_month_index": breach, "suggested_qty": round(qty, 1),
-           "safety_stock": round(safety_stock, 1),
+           "safety_stock": round(reorder_point, 1),
+           "target_level": round(target_level, 1),
            "projected": [round(p, 1) for p in projected],
            "moq_applied": moq_applied,
            "moq_months_of_cover": moq_months_of_cover,

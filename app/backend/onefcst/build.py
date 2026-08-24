@@ -337,7 +337,7 @@ def run() -> dict:
           f"④aliases={stats['plan4_aliases']} (unresolved {stats['unresolved_plan4']})")
     if stats.get("stock_policy_source"):
         print(f"[在庫の持ち方] source={stats['stock_policy_source'].split('/')[-1]}  "
-              f"min_stock_days filled={stats['stock_policy_fallback_filled']}"
+              f"max_stock_days filled={stats['stock_policy_ceiling_filled']}"
               f"  skipped labels={stats['stock_policy_skipped']}")
     else:
         print("[在庫の持ち方] no policy file found (glob miss) — skipped, non-blocking")

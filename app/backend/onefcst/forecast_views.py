@@ -341,6 +341,7 @@ def _suggestion(item: Item, stock: StockState | None, demand: list[float],
     s = suggest_order(current_balance=balance, monthly_demand=demand,
                       moq=item.moq, lead_time_days=effective_lead_time(item),
                       min_stock_days=item.min_stock_days,
+                      max_stock_days=item.max_stock_days,
                       moq_excessive_months=config.MOQ_EXCESSIVE_MONTHS)
     s["current_balance"] = balance
     s["stock_confidence"] = confidence
@@ -667,7 +668,8 @@ def item_detail(session, item_id: int) -> dict | None:
                      "observed_lead_time_days": item.observed_lead_time_days,
                      "observed_lead_time_samples": item.observed_lead_time_samples,
                      "effective_lead_time_days": effective_lead_time(item),
-                     "min_stock_days": item.min_stock_days},
+                     "min_stock_days": item.min_stock_days,
+                     "max_stock_days": item.max_stock_days},
             "method": method, "wape": wape, "wape_full_horizon": wape_full_horizon,
             "history": history, "forecast": forecast, "one_plan": one_plan,
             "weekly": weekly,

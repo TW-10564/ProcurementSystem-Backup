@@ -243,24 +243,43 @@ def build_registry() -> dict:
         _add_alias(session, alias_cache, item.id, row["plan_name"], "④企画名前", stats)
         stats["plan4_aliases"] += 1
 
-    # -- 5. category-level min_stock_days fallback (在庫の持ち方) -------------
-    # Only fills items 部品マスター left with no per-item value — never
-    # overrides one. See ingestion/stock_policy.py for the label crosswalk
-    # and which source rows are deliberately skipped.
+    # -- 5. category-level max_stock_days ceiling (在庫の持ち方) --------------
+    # FIX 2026-08-20: this used to fill Item.min_stock_days (a floor field)
+    # with a CEILING value (在庫の持ち方's 在庫日数上限) whenever 部品マスター
+    # left no per-item minimum — i.e. it silently relabeled a "don't exceed
+    # N days" cap as "never go below N days," which stock_projection.py then
+    # used as a reorder trigger, causing confirmed live over-ordering (see
+    # stock_projection.suggest_order()'s docstring). This is a distinct
+    # concept from min_stock_days, not a fallback for it, so every item with
+    # a category match gets its ceiling here regardless of whether it also
+    # has its own genuine min_stock_days floor. See ingestion/stock_policy.py
+    # for the label crosswalk and which source rows are deliberately skipped.
+    # FIX 2026-08-20: "Case GE/GEm" has a real 90-day ceiling but can't be
+    # identified by category/subcategory (Item.subcategory is form-factor
+    # only) — matched by Item.canonical_name PREFIX instead, checked BEFORE
+    # the category/subcategory lookup so it isn't shadowed by the generic
+    # "Case その他" bucket. See ingestion/stock_policy.py's docstring.
     policy_result = stock_policy.parse_stock_policy()
     policy = policy_result["policy"]
+    name_prefix_policy = policy_result["name_prefix_policy"]
     filled = 0
-    if policy:
+    if policy or name_prefix_policy:
         for item in by_adana.values():
-            if item.min_stock_days is not None or item.category is None:
+            if item.category is None:
                 continue
-            days = policy.get((item.category, item.subcategory))
+            days = None
+            for (cat, prefix), prefix_days in name_prefix_policy.items():
+                if item.category == cat and item.canonical_name.startswith(prefix):
+                    days = prefix_days
+                    break
+            if days is None:
+                days = policy.get((item.category, item.subcategory))
             if days is None:
                 days = policy.get((item.category, None))
             if days is not None:
-                item.min_stock_days = days
+                item.max_stock_days = days
                 filled += 1
-    stats["stock_policy_fallback_filled"] = filled
+    stats["stock_policy_ceiling_filled"] = filled
     stats["stock_policy_source"] = policy_result["source_file"]
     stats["stock_policy_skipped"] = policy_result["skipped"]
 
