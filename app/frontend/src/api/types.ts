@@ -284,6 +284,7 @@ export interface OrderActionInfo {
   status: "ordered" | "received" | "dismissed";
   qty_ordered: number | null;
   expected_arrival_date: string | null;
+  supplier: string | null;
   note: string | null;
   ordered_by: string | null;
   ordered_at: string | null;

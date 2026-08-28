@@ -436,6 +436,7 @@ export const translations = {
   fc_order_qty_placeholder: { ja: "発注数量", en: "Qty ordered" },
   fc_order_date_placeholder: { ja: "到着予定日", en: "Expected arrival" },
   fc_order_note_placeholder: { ja: "メモ（任意）", en: "Note (optional)" },
+  fc_order_supplier_placeholder: { ja: "仕入先（任意）", en: "Supplier (optional)" },
   fc_order_save: { ja: "保存", en: "Save" },
   fc_order_cancel: { ja: "キャンセル", en: "Cancel" },
   fc_order_ordered_by: { ja: "{who}が発注済みに設定", en: "Marked ordered by {who}" },

@@ -77,6 +77,7 @@ class OrderActionOut(BaseModel):
     status: str
     qty_ordered: float | None = None
     expected_arrival_date: date | None = None
+    supplier: str | None = None
     note: str | None = None
     ordered_by: str | None = None
     ordered_at: UtcDatetime | None = None
@@ -91,6 +92,7 @@ class MarkOrderedRequest(BaseModel):
     author: str = Field(..., min_length=1)
     qty_ordered: float | None = None
     expected_arrival_date: date | None = None
+    supplier: str | None = None
     note: str = ""
 
 

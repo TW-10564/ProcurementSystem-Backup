@@ -173,7 +173,7 @@ export const api = {
 
   markOrdered: (
     itemId: number,
-    body: { author: string; qty_ordered?: number; expected_arrival_date?: string; note?: string },
+    body: { author: string; qty_ordered?: number; expected_arrival_date?: string; supplier?: string; note?: string },
   ) =>
     http.post<OrderActionInfo>(`/order-actions/${itemId}/mark-ordered`, body).then((r) => r.data),
 

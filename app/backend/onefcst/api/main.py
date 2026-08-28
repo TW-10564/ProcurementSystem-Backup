@@ -569,6 +569,7 @@ def mark_ordered(request: Request, item_id: int, body: MarkOrderedRequest, sessi
     try:
         oa = order_svc.mark_ordered(session, item, qty_ordered=body.qty_ordered,
                                     expected_arrival_date=body.expected_arrival_date,
+                                    supplier=body.supplier,
                                     note=body.note, author=effective_author(request, body.author))
     except order_svc.OrderActionAlreadyActive as e:
         raise HTTPException(409, str(e))

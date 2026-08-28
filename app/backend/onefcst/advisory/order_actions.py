@@ -52,13 +52,14 @@ def list_active(session) -> dict[int, OrderAction]:
 
 
 def mark_ordered(session, item: Item, *, qty_ordered: float | None,
-                 expected_arrival_date: date | None, note: str, author: str) -> OrderAction:
+                 expected_arrival_date: date | None, supplier: str | None = None,
+                 note: str, author: str) -> OrderAction:
     if get_active(session, item.id) is not None:
         raise OrderActionAlreadyActive(
             f"item {item.id} already has an active order action — "
             f"confirm receipt or dismiss it first")
     oa = OrderAction(item_id=item.id, status="ordered", qty_ordered=qty_ordered,
-                     expected_arrival_date=expected_arrival_date, note=note,
+                     expected_arrival_date=expected_arrival_date, supplier=supplier, note=note,
                      ordered_by=author)
     session.add(oa)
     session.flush()

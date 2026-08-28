@@ -318,6 +318,7 @@ def _order_action_out(oa, today: date) -> dict:
         "id": oa.id, "status": oa.status, "qty_ordered": oa.qty_ordered,
         "expected_arrival_date": (oa.expected_arrival_date.isoformat()
                                  if oa.expected_arrival_date else None),
+        "supplier": oa.supplier,
         "note": oa.note, "ordered_by": oa.ordered_by,
         "ordered_at": as_utc_iso(oa.ordered_at),
         "awaiting_confirmation": bool(oa.expected_arrival_date and oa.expected_arrival_date <= today),

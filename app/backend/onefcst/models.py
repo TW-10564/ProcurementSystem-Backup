@@ -234,6 +234,7 @@ class OrderAction(Base):
     status = Column(String, nullable=False, default="ordered")  # ordered | received | dismissed
     qty_ordered = Column(Float)
     expected_arrival_date = Column(Date)
+    supplier = Column(String)
     note = Column(Text)
     ordered_by = Column(String)
     ordered_at = Column(DateTime, default=datetime.utcnow)

@@ -238,7 +238,10 @@ Tier-1 plans.
 
 **Method**: no-ML per-SKU competition — 5 candidates (seasonal / damped-trend /
 flat3 / flat6 / median6) plus a `combo` (equal-weight average) compete on each
-SKU's own 6-month walk-forward hold-out; winner forecasts 12 months. Reports
+SKU's own 6-month walk-forward hold-out; winner forecasts 6 months (`DEFAULT_HORIZON`
+in `forecasting.py`, capped there 2026-07-17 — ONE's own 部品予測 master only
+carries committed plan data ~6 months out, so forecasting further would be
+pure extrapolation with nothing on ONE's side to validate against). Reports
 both an `overall` (6-month blended) and `near_term` (M+1) WAPE, since accuracy
 is highly horizon-dependent and buyers act on the near-term number.
 
@@ -326,8 +329,12 @@ comparisons EMPTY, not passing. Do not put "④" back in
    order-suggestion correctness. Confirmed 2026-07-14 the divergence is wider
    than just data source: `_future_demand()` sums raw `PlanValue` rows over
    only 4 months, while `forecast_views.order_suggestions()` consumes the
-   full 12-month `make_forecast` pipeline output — a horizon mismatch, not
-   just a recomputation difference.
+   full `make_forecast` pipeline output — a horizon mismatch, not just a
+   recomputation difference. (That pipeline output was 12 months when this
+   was confirmed 2026-07-14; `DEFAULT_HORIZON` was capped to 6 on 2026-07-17,
+   so the mismatch is now 4 months vs 6, not 4 vs 12 — still a mismatch,
+   just a smaller one. Re-check both code paths before relying on this gap's
+   exact size.)
 
 5. **No incoming-PO / in-transit quantity is modeled** in
    `engine/stock_projection.py` — order suggestions assume zero incoming

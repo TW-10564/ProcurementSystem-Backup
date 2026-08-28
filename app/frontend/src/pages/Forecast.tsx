@@ -255,6 +255,7 @@ function OrderActionControl({
   const [formOpen, setFormOpen] = useState(false);
   const [qty, setQty] = useState(String(suggestedQty || ""));
   const [expected, setExpected] = useState("");
+  const [supplier, setSupplier] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -270,6 +271,7 @@ function OrderActionControl({
         author: currentAuthor(),
         qty_ordered: qty.trim() ? Number(qty) : undefined,
         expected_arrival_date: expected || undefined,
+        supplier: supplier.trim() || undefined,
         note: note.trim() || undefined,
       });
       setFormOpen(false);
@@ -317,6 +319,7 @@ function OrderActionControl({
         <span className={"order-action-badge" + (action.awaiting_confirmation ? " awaiting" : "")}>
           {action.awaiting_confirmation ? t("fc_order_awaiting_confirmation") : t("fc_order_ordered_badge")}
           {action.expected_arrival_date ? ` · ${fmtDate(action.expected_arrival_date, lang)}` : ""}
+          {action.supplier ? ` · ${action.supplier}` : ""}
         </span>
         <div style={{ display: "flex", gap: 10 }}>
           <button className="btn-link" disabled={busy} onClick={confirmReceived}>
@@ -345,6 +348,8 @@ function OrderActionControl({
             placeholder={t("fc_order_qty_placeholder")} style={{ width: "100%" }} />
       <input type="date" value={expected} onChange={(e) => setExpected(e.target.value)}
             title={t("fc_order_date_placeholder")} style={{ width: "100%" }} />
+      <input type="text" value={supplier} onChange={(e) => setSupplier(e.target.value)}
+            placeholder={t("fc_order_supplier_placeholder")} style={{ width: "100%" }} />
       <input type="text" value={note} onChange={(e) => setNote(e.target.value)}
             placeholder={t("fc_order_note_placeholder")} style={{ width: "100%" }} />
       <div style={{ display: "flex", gap: 6 }}>

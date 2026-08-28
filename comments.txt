@@ -1,0 +1,4 @@
+source .venv/bin/activate
+ python3 -m uvicorn onefcst.api.main:app --host 0.0.0.0 --port 8601
+
+ npm run dev -- --host 0.0.0.0 --port 5176
