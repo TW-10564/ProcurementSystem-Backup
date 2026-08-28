@@ -700,7 +700,11 @@ export default function Forecast() {
               value={exportTier}
               onChange={(e) => setExportTier(e.target.value as "all" | "1" | "2")}
               title={t("fc_export_scope_hint")}
-              style={{ padding: "6px 8px", borderRadius: 8 }}
+              style={{
+                padding: "6px 8px", borderRadius: 8,
+                border: "1px solid var(--line)", background: "#fff", color: "var(--ink)",
+                fontWeight: 600, fontSize: "0.79rem",
+              }}
             >
               <option value="all" style={{ borderRadius: 8 }}>{t("fc_export_scope_all")}</option>
               <option value="1" style={{ borderRadius: 8 }}>{t("fc_export_scope_tier1")}</option>
