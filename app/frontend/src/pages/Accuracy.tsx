@@ -59,9 +59,13 @@ export default function Accuracy() {
     api.salesReconciliation().then(setSalesRecon).catch(onError);
   }, []);
 
-  const maxWape = report
-    ? Math.max(report.avg_flat_wape, report.avg_last_year_wape, report.avg_seasonal_wape) * 1.15
-    : 1;
+  // ①販売計画 absent → backtest cannot run; the payload is a marked stub, not
+  // a real result. Guard every read of its numeric fields on this.
+  const btUnavailable = report?.status === "unavailable";
+  const maxWape =
+    report && !btUnavailable
+      ? Math.max(report.avg_flat_wape, report.avg_last_year_wape, report.avg_seasonal_wape) * 1.15
+      : 1;
 
   // head-to-head verdict: one-off matched month (same target, same conditions)
   const matched = planner?.historical_reference.one_off_matched_month ?? null;
@@ -104,7 +108,7 @@ export default function Accuracy() {
           </div>
           <div className="stat">
             <div className="lab">{lang === "ja" ? "バックテスト期間数" : "Backtest periods"}</div>
-            <div className="val">{report ? report.n_periods : "—"}</div>
+            <div className="val">{report && !btUnavailable ? report.n_periods : "—"}</div>
           </div>
         </div>
       </div>
@@ -473,6 +477,23 @@ export default function Accuracy() {
       {/* ── backtest: method benchmark ────────────────────────── */}
       {!report ? (
         <div className="empty">{error ? t("common_load_failed") : t("common_loading")}</div>
+      ) : btUnavailable ? (
+        <div className="card">
+          <div className="hd">
+            <div>
+              <div className="eyebrow">{lang === "ja" ? "手法ベンチマーク" : "Method benchmark"}</div>
+              <h3>{t("accuracy_wape_title")}</h3>
+            </div>
+          </div>
+          <div className="empty" style={{ padding: "20px 24px", textAlign: "left" }}>
+            {lang === "ja"
+              ? "バックテストは販売計画（①）ファイルが未配置のため利用できません。data/planning に販売計画ワークブックを配置してください。"
+              : "Backtest unavailable — the ①販売計画 planning workbook is not present under data/planning."}
+            {report.reason && (
+              <div className="dim" style={{ marginTop: 6, fontSize: "0.82rem" }}>{report.reason}</div>
+            )}
+          </div>
+        </div>
       ) : (
         <>
           <div className="card">

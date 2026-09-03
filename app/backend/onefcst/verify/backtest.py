@@ -13,6 +13,7 @@ a real finding, not a foregone conclusion — this harness is what would catch i
 """
 from __future__ import annotations
 
+from ..config import find_planning_file
 from ..engine.seasonality import compute_seasonality
 from ..ingestion.keisuu import parse_keisuu_history
 
@@ -29,6 +30,26 @@ def _shape(values: list[float]) -> list[float]:
 
 
 def run(min_history: int = 5) -> dict:
+    # Gate C reads ①係数計算 LIVE from the planning workbook, not from the DB —
+    # so unlike every other /reports/* endpoint it hard-fails when the ①販売計画
+    # file is not present under PLANNING_DIR. Degrade to a marked "unavailable"
+    # payload (same discipline as build.py's ④-MISSING branch) rather than let
+    # planning_file()'s FileNotFoundError become a 500 — a 5xx here trips the
+    # frontend's SERVER_ERROR_EVENT and paints a misleading "cannot reach the
+    # API" screen for what is really just an absent optional source.
+    if find_planning_file("①") is None:
+        return {
+            "status": "unavailable",
+            "reason": "planning source ① (販売計画) not present under PLANNING_DIR "
+                      "— the walk-forward backtest needs its 係数計算 history sheet",
+            "n_periods": 0,
+            "avg_seasonal_wape": None,
+            "avg_flat_wape": None,
+            "avg_last_year_wape": None,
+            "rows": [],
+            "winner": None,
+        }
+
     history = parse_keisuu_history()               # {期: [12 monthly units]}
     kis = sorted(k for k in history if all(v is not None for v in history[k]))
 
@@ -64,7 +85,8 @@ def run(min_history: int = 5) -> dict:
         vals = [r[key] for r in rows]
         return round(sum(vals) / len(vals), 2) if vals else None
 
-    summary = {"n_periods": len(rows),
+    summary = {"status": "ok",
+              "n_periods": len(rows),
               "avg_seasonal_wape": avg("seasonal_wape"),
               "avg_flat_wape": avg("flat_wape"),
               "avg_last_year_wape": avg("last_year_wape"), "rows": rows}

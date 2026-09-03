@@ -428,6 +428,13 @@ export interface BacktestRow {
 }
 
 export interface BacktestReport {
+  // "ok" for a real result; "unavailable" when the ①販売計画 planning workbook
+  // (which Gate C reads live, not from the DB) is not present. In the
+  // "unavailable" case n_periods is 0, rows is [], the avg_* fields come back
+  // null and `reason` carries the explanation — the UI checks `status` and
+  // renders a note instead of reading them.
+  status?: "ok" | "unavailable";
+  reason?: string;
   n_periods: number;
   avg_seasonal_wape: number;
   avg_flat_wape: number;
